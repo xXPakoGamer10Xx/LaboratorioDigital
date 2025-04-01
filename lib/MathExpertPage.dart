@@ -91,7 +91,8 @@ El usuario puede proporcionar:
     User? currentUser = _auth.currentUser;
     if (currentUser != null) {
       _chatId = currentUser.uid;
-      print("Math Page - Authenticated User: ${currentUser.email}, Chat ID: $_chatId");
+      print(
+          "Math Page - Authenticated User: ${currentUser.email}, Chat ID: $_chatId");
     } else {
       _chatId = null;
       print("Math Page - No authenticated user.");
@@ -166,7 +167,8 @@ El usuario puede proporcionar:
         data['id'] = doc.id;
         if (data['timestamp'] == null || data['timestamp'] is! Timestamp) {
           data['timestamp'] = Timestamp.now();
-          print("Advertencia: Timestamp inválido encontrado en doc ${doc.id}, usando now()");
+          print(
+              "Advertencia: Timestamp inválido encontrado en doc ${doc.id}, usando now()");
         }
         return data;
       }).toList();
@@ -203,7 +205,8 @@ El usuario puede proporcionar:
   Future<void> _saveMessageToFirestore(Map<String, dynamic> message) async {
     if (_chatId == null) return;
     if (message['role'] == 'system' &&
-        (message['text'].contains('subida:') || message['text'].contains('eliminada'))) {
+        (message['text'].contains('subida:') ||
+            message['text'].contains('eliminada'))) {
       print("Math Page - Local UI message not saved: ${message['text']}");
       return;
     }
@@ -213,7 +216,8 @@ El usuario puede proporcionar:
       messageToSave.remove('isExpanded');
       messageToSave.remove('imageBytes');
       messageToSave['timestamp'] = FieldValue.serverTimestamp();
-      print("Math Page - Saving message to Firestore (${_chatId}/math_messages): ${messageToSave['role']}");
+      print(
+          "Math Page - Saving message to Firestore (${_chatId}/math_messages): ${messageToSave['role']}");
       await _firestore
           .collection('chats')
           .doc(_chatId)
@@ -258,18 +262,24 @@ El usuario puede proporcionar:
       try {
         Uint8List imageBytes;
         if (kIsWeb) {
-          if (_selectedFile!.bytes == null) throw Exception("Bytes de imagen no disponibles en web.");
+          if (_selectedFile!.bytes == null)
+            throw Exception("Bytes de imagen no disponibles en web.");
           imageBytes = _selectedFile!.bytes!;
         } else {
-          if (_selectedFile!.path == null) throw Exception("Ruta de imagen no disponible en móvil.");
+          if (_selectedFile!.path == null)
+            throw Exception("Ruta de imagen no disponible en móvil.");
           imageBytes = await File(_selectedFile!.path!).readAsBytes();
         }
-        if (imageBytes.isEmpty) throw Exception("El archivo de imagen está vacío o corrupto.");
+        if (imageBytes.isEmpty)
+          throw Exception("El archivo de imagen está vacío o corrupto.");
         String mimeType = 'image/jpeg';
         final extension = _selectedFile!.extension?.toLowerCase();
-        if (extension == 'png') mimeType = 'image/png';
-        else if (extension == 'webp') mimeType = 'image/webp';
-        else if (extension == 'gif') mimeType = 'image/gif';
+        if (extension == 'png')
+          mimeType = 'image/png';
+        else if (extension == 'webp')
+          mimeType = 'image/webp';
+        else if (extension == 'gif')
+          mimeType = 'image/gif';
         else if (extension == 'heic') mimeType = 'image/heic';
         partsForGemini.add(DataPart(mimeType, imageBytes));
         userMessageForHistory['imageBytes'] = imageBytes;
@@ -339,10 +349,12 @@ El usuario puede proporcionar:
 
       conversationHistory.add(Content.multi(partsForGemini));
 
-      print("Math Page - Sending ${conversationHistory.length} content items to Gemini...");
+      print(
+          "Math Page - Sending ${conversationHistory.length} content items to Gemini...");
       final response = await _model!.generateContent(conversationHistory);
       print("Math Page - Response received.");
-      final assistantResponseText = response.text ?? 'El asistente no proporcionó respuesta.';
+      final assistantResponseText =
+          response.text ?? 'El asistente no proporcionó respuesta.';
       final assistantMessage = {
         'role': 'assistant',
         'text': assistantResponseText,
@@ -380,7 +392,8 @@ El usuario puede proporcionar:
           if (!await Permission.photos.request().isGranted) {
             if (mounted) {
               ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(content: Text('Permiso para acceder a imágenes denegado.')),
+                const SnackBar(
+                    content: Text('Permiso para acceder a imágenes denegado.')),
               );
             }
             return;
@@ -389,7 +402,8 @@ El usuario puede proporcionar:
           if (!await Permission.storage.request().isGranted) {
             if (mounted) {
               ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(content: Text('Permiso para acceder a imágenes denegado.')),
+                const SnackBar(
+                    content: Text('Permiso para acceder a imágenes denegado.')),
               );
             }
             return;
@@ -406,10 +420,11 @@ El usuario puede proporcionar:
       if (result != null && result.files.isNotEmpty && mounted) {
         final file = result.files.first;
 
-        if (file.size != null && file.size > 5 * 1024 * 1024) {
+        if (file.size > 5 * 1024 * 1024) {
           if (mounted) {
             ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(content: Text('La imagen excede el límite de 5MB.')),
+              const SnackBar(
+                  content: Text('La imagen excede el límite de 5MB.')),
             );
           }
           return;
@@ -557,14 +572,15 @@ El usuario puede proporcionar:
       }
       if (role == 'ASSISTANT' &&
           (text == _initialWelcomeMessageText ||
-              text == 'Inicia sesión para guardar y ver tu historial.')) return false;
+              text == 'Inicia sesión para guardar y ver tu historial.'))
+        return false;
       return true;
     }).toList();
 
     if (downloadableHistory.isEmpty) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('No hay historial relevante para descargar.')));
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+            content: Text('No hay historial relevante para descargar.')));
       }
       return;
     }
@@ -615,8 +631,8 @@ El usuario puede proporcionar:
           ..click();
         html.Url.revokeObjectUrl(url);
         if (mounted) {
-          ScaffoldMessenger.of(context)
-              .showSnackBar(const SnackBar(content: Text('Descarga iniciada (Web).')));
+          ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('Descarga iniciada (Web).')));
         }
       } else {
         final result = await FilePicker.platform.saveFile(
@@ -633,7 +649,9 @@ El usuario puede proporcionar:
         } else {
           if (mounted) {
             ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(content: Text('Historial guardado en: ${result.split('/').last}')),
+              SnackBar(
+                  content:
+                      Text('Historial guardado en: ${result.split('/').last}')),
             );
           }
         }
@@ -676,7 +694,8 @@ El usuario puede proporcionar:
     return LayoutBuilder(
       builder: (context, constraints) {
         bool isWideScreen = constraints.maxWidth > 720;
-        double chatBubbleMaxWidth = isWideScreen ? 600 : constraints.maxWidth * 0.8;
+        double chatBubbleMaxWidth =
+            isWideScreen ? 600 : constraints.maxWidth * 0.8;
 
         bool canSendMessage = !_isLoading &&
             (_controller.text.trim().isNotEmpty || _selectedFile != null);
@@ -691,7 +710,8 @@ El usuario puede proporcionar:
                   text.contains('Error:'))) return false;
           if (role == 'ASSISTANT' &&
               (text == _initialWelcomeMessageText ||
-                  text == 'Inicia sesión para guardar y ver tu historial.')) return false;
+                  text == 'Inicia sesión para guardar y ver tu historial.'))
+            return false;
           return true;
         });
 
@@ -702,12 +722,15 @@ El usuario puede proporcionar:
             elevation: 1,
             leading: IconButton(
               icon: const Icon(Icons.arrow_back),
-              onPressed: () => Navigator.canPop(context) ? Navigator.pop(context) : null,
+              onPressed: () =>
+                  Navigator.canPop(context) ? Navigator.pop(context) : null,
             ),
             actions: [
               IconButton(
                 icon: const Icon(Icons.download_outlined),
-                onPressed: (_isLoading || !hasDownloadableContent) ? null : _downloadHistory,
+                onPressed: (_isLoading || !hasDownloadableContent)
+                    ? null
+                    : _downloadHistory,
                 tooltip: 'Descargar historial',
               ),
               IconButton(
@@ -754,14 +777,17 @@ El usuario puede proporcionar:
                         alignment = Alignment.centerLeft;
                         textAlign = TextAlign.left;
                       }
-                      if (isSystem && (text.contains('subida:') || text.contains('eliminada:'))) {
+                      if (isSystem &&
+                          (text.contains('subida:') ||
+                              text.contains('eliminada:'))) {
                         return const SizedBox.shrink();
                       }
                       return Align(
                         alignment: alignment,
                         child: Container(
                           margin: const EdgeInsets.symmetric(vertical: 5.0),
-                          padding: const EdgeInsets.symmetric(horizontal: 14.0, vertical: 10.0),
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 14.0, vertical: 10.0),
                           decoration: BoxDecoration(
                             color: backgroundColor,
                             borderRadius: BorderRadius.circular(16.0),
@@ -774,22 +800,30 @@ El usuario puede proporcionar:
                               ),
                             ],
                           ),
-                          constraints: BoxConstraints(maxWidth: chatBubbleMaxWidth),
+                          constraints:
+                              BoxConstraints(maxWidth: chatBubbleMaxWidth),
                           child: Column(
-                            crossAxisAlignment: isSystem ? CrossAxisAlignment.center : CrossAxisAlignment.start,
+                            crossAxisAlignment: isSystem
+                                ? CrossAxisAlignment.center
+                                : CrossAxisAlignment.start,
                             mainAxisSize: MainAxisSize.min,
                             children: [
-                              if (isUser && fileName != null && imageBytes != null)
+                              if (isUser &&
+                                  fileName != null &&
+                                  imageBytes != null)
                                 Padding(
                                   padding: const EdgeInsets.only(bottom: 6.0),
                                   child: Column(
-                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
                                     children: [
                                       Row(
                                         mainAxisSize: MainAxisSize.min,
                                         children: [
                                           Icon(Icons.image_outlined,
-                                              size: 16, color: textColor.withOpacity(0.8)),
+                                              size: 16,
+                                              color:
+                                                  textColor.withOpacity(0.8)),
                                           const SizedBox(width: 4),
                                           Flexible(
                                             child: Text(
@@ -797,7 +831,8 @@ El usuario puede proporcionar:
                                               style: TextStyle(
                                                   fontSize: 13,
                                                   fontStyle: FontStyle.italic,
-                                                  color: textColor.withOpacity(0.8)),
+                                                  color: textColor
+                                                      .withOpacity(0.8)),
                                               overflow: TextOverflow.ellipsis,
                                             ),
                                           ),
@@ -810,8 +845,8 @@ El usuario puede proporcionar:
                                           imageBytes,
                                           fit: BoxFit.contain,
                                           height: 100,
-                                          errorBuilder: (c, e, s) =>
-                                          const Text('Error al mostrar imagen'),
+                                          errorBuilder: (c, e, s) => const Text(
+                                              'Error al mostrar imagen'),
                                         ),
                                       ),
                                     ],
@@ -820,33 +855,40 @@ El usuario puede proporcionar:
                               if (text.isNotEmpty)
                                 (role == 'assistant')
                                     ? MarkdownBody(
-                                  data: text,
-                                  selectable: true,
-                                  styleSheet: MarkdownStyleSheet.fromTheme(Theme.of(context))
-                                      .copyWith(
-                                    p: Theme.of(context)
-                                        .textTheme
-                                        .bodyMedium
-                                        ?.copyWith(color: textColor, height: 1.4),
-                                    code: Theme.of(context)
-                                        .textTheme
-                                        .bodyMedium
-                                        ?.copyWith(
-                                        fontFamily: 'monospace',
-                                        backgroundColor: Colors.black12,
-                                        color: textColor),
-                                  ),
-                                )
+                                        data: text,
+                                        selectable: true,
+                                        styleSheet:
+                                            MarkdownStyleSheet.fromTheme(
+                                                    Theme.of(context))
+                                                .copyWith(
+                                          p: Theme.of(context)
+                                              .textTheme
+                                              .bodyMedium
+                                              ?.copyWith(
+                                                  color: textColor,
+                                                  height: 1.4),
+                                          code: Theme.of(context)
+                                              .textTheme
+                                              .bodyMedium
+                                              ?.copyWith(
+                                                  fontFamily: 'monospace',
+                                                  backgroundColor:
+                                                      Colors.black12,
+                                                  color: textColor),
+                                        ),
+                                      )
                                     : SelectableText(
-                                  text,
-                                  textAlign: textAlign,
-                                  style: TextStyle(
-                                    color: textColor,
-                                    fontStyle: isSystem ? FontStyle.italic : FontStyle.normal,
-                                    fontSize: isSystem ? 13 : 16,
-                                    height: 1.4,
-                                  ),
-                                ),
+                                        text,
+                                        textAlign: textAlign,
+                                        style: TextStyle(
+                                          color: textColor,
+                                          fontStyle: isSystem
+                                              ? FontStyle.italic
+                                              : FontStyle.normal,
+                                          fontSize: isSystem ? 13 : 16,
+                                          height: 1.4,
+                                        ),
+                                      ),
                             ],
                           ),
                         ),
@@ -856,19 +898,21 @@ El usuario puede proporcionar:
                 ),
                 if (_selectedFile != null)
                   Padding(
-                    padding: EdgeInsets.fromLTRB(
-                        isWideScreen ? 24.0 : 8.0, 0, isWideScreen ? 24.0 : 8.0, 8.0),
+                    padding: EdgeInsets.fromLTRB(isWideScreen ? 24.0 : 8.0, 0,
+                        isWideScreen ? 24.0 : 8.0, 8.0),
                     child: Card(
                       elevation: 2,
                       margin: EdgeInsets.zero,
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                      shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12)),
                       child: Padding(
                         padding: const EdgeInsets.all(8.0),
                         child: Column(
                           children: [
                             Row(
                               children: [
-                                Icon(Icons.image_outlined, color: Colors.teal, size: 20),
+                                Icon(Icons.image_outlined,
+                                    color: Colors.teal, size: 20),
                                 const SizedBox(width: 8),
                                 Expanded(
                                     child: Text(_selectedFile!.name,
@@ -878,25 +922,33 @@ El usuario puede proporcionar:
                                   style: TextButton.styleFrom(
                                       padding: EdgeInsets.zero,
                                       minimumSize: const Size(60, 30),
-                                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                                      tapTargetSize:
+                                          MaterialTapTargetSize.shrinkWrap,
                                       alignment: Alignment.centerRight),
                                   onPressed: () {
                                     if (mounted) {
-                                      setState(() => _isPreviewExpanded = !_isPreviewExpanded);
+                                      setState(() => _isPreviewExpanded =
+                                          !_isPreviewExpanded);
                                     }
                                   },
-                                  child: Text(_isPreviewExpanded ? 'Ocultar' : 'Mostrar',
-                                      style: const TextStyle(color: Colors.teal, fontSize: 13)),
+                                  child: Text(
+                                      _isPreviewExpanded
+                                          ? 'Ocultar'
+                                          : 'Mostrar',
+                                      style: const TextStyle(
+                                          color: Colors.teal, fontSize: 13)),
                                 ),
                                 TextButton(
                                   style: TextButton.styleFrom(
                                       padding: EdgeInsets.zero,
                                       minimumSize: const Size(60, 30),
-                                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                                      tapTargetSize:
+                                          MaterialTapTargetSize.shrinkWrap,
                                       alignment: Alignment.centerRight),
                                   onPressed: _isLoading ? null : _removeImage,
                                   child: const Text('Eliminar',
-                                      style: TextStyle(color: Colors.red, fontSize: 13)),
+                                      style: TextStyle(
+                                          color: Colors.red, fontSize: 13)),
                                 ),
                               ],
                             ),
@@ -905,30 +957,37 @@ El usuario puede proporcionar:
                               curve: Curves.easeInOut,
                               child: _isPreviewExpanded
                                   ? ConstrainedBox(
-                                constraints: BoxConstraints(maxHeight: isWideScreen ? 250 : 150),
-                                child: Padding(
-                                  padding: const EdgeInsets.only(top: 8.0),
-                                  child: ClipRRect(
-                                    borderRadius: BorderRadius.circular(8),
-                                    child: kIsWeb
-                                        ? Image.memory(
-                                      _selectedFile!.bytes!,
-                                      fit: BoxFit.contain,
-                                      errorBuilder: (c, e, s) =>
-                                      const Text('Error al mostrar imagen web'),
+                                      constraints: BoxConstraints(
+                                          maxHeight: isWideScreen ? 250 : 150),
+                                      child: Padding(
+                                        padding:
+                                            const EdgeInsets.only(top: 8.0),
+                                        child: ClipRRect(
+                                          borderRadius:
+                                              BorderRadius.circular(8),
+                                          child: kIsWeb
+                                              ? Image.memory(
+                                                  _selectedFile!.bytes!,
+                                                  fit: BoxFit.contain,
+                                                  errorBuilder: (c, e, s) =>
+                                                      const Text(
+                                                          'Error al mostrar imagen web'),
+                                                )
+                                              : (_selectedFile!.path != null)
+                                                  ? Image.file(
+                                                      File(
+                                                          _selectedFile!.path!),
+                                                      fit: BoxFit.contain,
+                                                      errorBuilder: (c, e, s) =>
+                                                          const Text(
+                                                              'Error al mostrar imagen móvil'),
+                                                    )
+                                                  : const Center(
+                                                      child: Text(
+                                                          'Vista previa no disponible (móvil)')),
+                                        ),
+                                      ),
                                     )
-                                        : (_selectedFile!.path != null)
-                                        ? Image.file(
-                                      File(_selectedFile!.path!),
-                                      fit: BoxFit.contain,
-                                      errorBuilder: (c, e, s) =>
-                                      const Text('Error al mostrar imagen móvil'),
-                                    )
-                                        : const Center(
-                                        child: Text('Vista previa no disponible (móvil)')),
-                                  ),
-                                ),
-                              )
                                   : const SizedBox.shrink(),
                             ),
                           ],
@@ -937,18 +996,21 @@ El usuario puede proporcionar:
                     ),
                   ),
                 Container(
-                  padding: EdgeInsets.fromLTRB(
-                      isWideScreen ? 24.0 : 8.0, 8.0, isWideScreen ? 24.0 : 8.0, 16.0),
+                  padding: EdgeInsets.fromLTRB(isWideScreen ? 24.0 : 8.0, 8.0,
+                      isWideScreen ? 24.0 : 8.0, 16.0),
                   decoration: BoxDecoration(
                     color: Theme.of(context).cardColor,
-                    border: Border(top: BorderSide(color: Colors.grey.shade300, width: 0.5)),
+                    border: Border(
+                        top: BorderSide(
+                            color: Colors.grey.shade300, width: 0.5)),
                   ),
                   child: Row(
                     crossAxisAlignment: CrossAxisAlignment.end,
                     children: [
                       IconButton(
                         padding: const EdgeInsets.only(bottom: 8, right: 4),
-                        icon: const Icon(Icons.add_photo_alternate_outlined, size: 28),
+                        icon: const Icon(Icons.add_photo_alternate_outlined,
+                            size: 28),
                         color: Colors.teal,
                         tooltip: 'Seleccionar Imagen',
                         onPressed: _isLoading ? null : _pickImage,
@@ -964,11 +1026,13 @@ El usuario puede proporcionar:
                             ),
                             focusedBorder: OutlineInputBorder(
                               borderRadius: BorderRadius.circular(25.0),
-                              borderSide: BorderSide(color: Colors.teal.shade200, width: 1.5),
+                              borderSide: BorderSide(
+                                  color: Colors.teal.shade200, width: 1.5),
                             ),
                             filled: true,
                             fillColor: Colors.grey.shade100,
-                            contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                            contentPadding: const EdgeInsets.symmetric(
+                                horizontal: 16, vertical: 12),
                             isDense: true,
                           ),
                           minLines: 1,
@@ -976,7 +1040,8 @@ El usuario puede proporcionar:
                           textInputAction: TextInputAction.send,
                           onSubmitted: (value) {
                             if (!_isLoading &&
-                                (_controller.text.trim().isNotEmpty || _selectedFile != null)) {
+                                (_controller.text.trim().isNotEmpty ||
+                                    _selectedFile != null)) {
                               _generateResponse(_controller.text.trim());
                             }
                           },
@@ -990,15 +1055,17 @@ El usuario puede proporcionar:
                         padding: const EdgeInsets.only(bottom: 8, left: 4),
                         icon: _isLoading
                             ? const SizedBox(
-                          width: 24,
-                          height: 24,
-                          child: CircularProgressIndicator(strokeWidth: 2),
-                        )
+                                width: 24,
+                                height: 24,
+                                child:
+                                    CircularProgressIndicator(strokeWidth: 2),
+                              )
                             : const Icon(Icons.send, size: 28),
                         tooltip: 'Enviar Mensaje',
                         color: canSendMessage ? Colors.teal : Colors.grey,
-                        onPressed:
-                        canSendMessage ? () => _generateResponse(_controller.text.trim()) : null,
+                        onPressed: canSendMessage
+                            ? () => _generateResponse(_controller.text.trim())
+                            : null,
                       ),
                     ],
                   ),

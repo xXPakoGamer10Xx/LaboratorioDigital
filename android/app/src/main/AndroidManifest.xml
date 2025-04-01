@@ -17,9 +17,9 @@
     <uses-feature android:name="android.hardware.camera" android:required="false" />
 
     <application
-        android:label="laboratorio_digital"
+        android:label="Laboratorio Digital"
         android:name="${applicationName}"
-        android:icon="@mipmap/ic_launcher"
+        android:icon="@mipmap/launcher_icon"
         android:requestLegacyExternalStorage="true">
         <activity
             android:name=".MainActivity"

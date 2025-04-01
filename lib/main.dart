@@ -3,7 +3,6 @@ import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'dart:async';
 import 'firebase_options.dart';
-import 'HomeScreen.dart';
 import 'auth_gate.dart';
 
 void main() async {
@@ -80,8 +79,10 @@ class _SplashScreenState extends State<SplashScreen>
       if (mounted) {
         Navigator.of(context).pushReplacement(
           PageRouteBuilder(
-            pageBuilder: (context, animation, secondaryAnimation) => const AuthGate(),
-            transitionsBuilder: (context, animation, secondaryAnimation, child) {
+            pageBuilder: (context, animation, secondaryAnimation) =>
+                const AuthGate(),
+            transitionsBuilder:
+                (context, animation, secondaryAnimation, child) {
               return FadeTransition(opacity: animation, child: child);
             },
             transitionDuration: const Duration(milliseconds: 500),
@@ -125,7 +126,8 @@ class _SplashScreenState extends State<SplashScreen>
                 style: TextStyle(
                   fontSize: 32,
                   fontWeight: FontWeight.bold,
-                  color: Colors.black, // Texto negro para contraste con fondo blanco
+                  color: Colors
+                      .black, // Texto negro para contraste con fondo blanco
                   letterSpacing: 2.0,
                 ),
               ),
