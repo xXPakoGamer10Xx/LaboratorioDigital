@@ -1,6 +1,6 @@
 # laboratorio_digital
 
-A new Flutter project.
+Proyecto a base del modelo Gemini2.5 resolvemos y explicamos matematicas, fisica, normas IEEE, graficadora de funciones
 
 ## Getting Started
 
