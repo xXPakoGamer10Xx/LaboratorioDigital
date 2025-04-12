@@ -113,7 +113,7 @@ El usuario puede proporcionar:
     }
     try {
       _model = GenerativeModel(
-        model: 'gemini-2.5-pro-exp-03-25', // Actualizado para consistencia
+        model: 'gemini-2.5-pro-exp-03-25',
         apiKey: apiKey,
         generationConfig: GenerationConfig(
           temperature: 0.6,
@@ -160,16 +160,15 @@ El usuario puede proporcionar:
         return data;
       }).where((msg) => msg['text'] != 'init').toList();
 
-      if (newHistory.isEmpty) {
+      if (newHistory.isEmpty && !_isLoading) {
         final initialMessage = {
           'role': 'assistant',
           'text': _initialWelcomeMessageText,
           'timestamp': Timestamp.now(),
         };
-        setState(() {
-          _chatHistory = [initialMessage];
-        });
-        _saveMessageToFirestore(initialMessage);
+        if (_chatHistory.isEmpty || _chatHistory.first['text'] != _initialWelcomeMessageText) {
+          _saveMessageToFirestore(initialMessage);
+        }
       } else {
         setState(() {
           _chatHistory = newHistory;
@@ -439,7 +438,7 @@ El usuario puede proporcionar:
       context: context,
       builder: (context) => AlertDialog(
         title: const Text('Limpiar Chat de Figuras'),
-        content: const Text('¿Estás seguro de que quieres borrar todo el historial?'),
+        content: const Text('¿Estás seguro de que quieres borrar todo el historial de este chat? Esta acción no se puede deshacer.'),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(context).pop(false),
@@ -452,22 +451,25 @@ El usuario puede proporcionar:
         ],
       ),
     );
+
     if (confirm != true) return;
 
-    setState(() {
-      _chatHistory.clear();
-      _selectedFile = null;
-      _selectedShape = null;
-      _isPreviewExpanded = false;
-      _side1Controller.clear();
-      _side2Controller.clear();
-      _textController.clear();
-      _sidesController.clear();
-      _areaController.clear();
-      _perimeterController.clear();
-      _apothemController.clear();
-      _isLoading = true;
-    });
+    if (mounted) {
+      setState(() {
+        _chatHistory.clear();
+        _selectedFile = null;
+        _selectedShape = null;
+        _isPreviewExpanded = false;
+        _side1Controller.clear();
+        _side2Controller.clear();
+        _textController.clear();
+        _sidesController.clear();
+        _areaController.clear();
+        _perimeterController.clear();
+        _apothemController.clear();
+        _isLoading = true;
+      });
+    }
 
     final welcomeMessage = {
       'role': 'assistant',
@@ -481,28 +483,53 @@ El usuario puede proporcionar:
       print("Shapes Page - Clearing Firestore for $_chatId/shapes_messages...");
       try {
         final ref = _firestore.collection('chats').doc(_chatId).collection('shapes_messages');
-        var snapshot = await ref.limit(100).get();
-        while (snapshot.docs.isNotEmpty) {
-          final batch = _firestore.batch();
-          for (var doc in snapshot.docs) batch.delete(doc.reference);
-          await batch.commit();
-          print("Lote de ${snapshot.docs.length} mensajes borrado.");
+        QuerySnapshot snapshot;
+        int deletedCount = 0;
+        do {
           snapshot = await ref.limit(100).get();
-        }
+          if (snapshot.docs.isNotEmpty) {
+            final batch = _firestore.batch();
+            for (var doc in snapshot.docs) {
+              batch.delete(doc.reference);
+            }
+            await batch.commit();
+            deletedCount += snapshot.docs.length;
+            print("Lote de ${snapshot.docs.length} mensajes borrado (total: $deletedCount).");
+          }
+        } while (snapshot.docs.isNotEmpty);
         print("Shapes Page - Firestore history cleared.");
-        _saveMessageToFirestore(welcomeMessage);
-        if (mounted) setState(() => _chatHistory.add(welcomeMessage));
+
+        await _saveMessageToFirestore(welcomeMessage);
+
+        if (mounted) {
+          setState(() {
+            _chatHistory = [welcomeMessage];
+            _isLoading = false;
+          });
+        }
+        _scrollToBottom();
       } catch (e) {
         print("Shapes Page - Error clearing Firestore: $e");
-        _addErrorMessage('Error limpiando historial: $e');
-        if (mounted) setState(() => _chatHistory.add(welcomeMessage));
+        final err = {
+          'role': 'system',
+          'text': 'Error limpiando historial nube: $e',
+          'timestamp': Timestamp.now()
+        };
+        if (mounted) {
+          setState(() {
+            _chatHistory = [err, welcomeMessage];
+            _isLoading = false;
+          });
+        }
+        _scrollToBottom();
       }
     } else {
-      if (mounted) setState(() => _chatHistory.add(welcomeMessage));
-    }
-
-    if (mounted) {
-      setState(() => _isLoading = false);
+      if (mounted) {
+        setState(() {
+          _chatHistory = [welcomeMessage];
+          _isLoading = false;
+        });
+      }
       _scrollToBottom();
     }
   }
@@ -596,7 +623,7 @@ El usuario puede proporcionar:
         } else {
           if (mounted) {
             ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(content: Text('Historial guardado en: ${result.split('/').last}')),
+              SnackBar(content: Text('Historial guardado en: ${result.split(Platform.pathSeparator).last}')),
             );
           }
         }
@@ -743,9 +770,9 @@ El usuario puede proporcionar:
     return LayoutBuilder(
       builder: (context, constraints) {
         bool isWideScreen = constraints.maxWidth > 720;
-        double chatBubbleMaxWidth = isWideScreen ? 600 : constraints.maxWidth * 0.8;
+        double chatBubbleMaxWidth = isWideScreen ? 600 : constraints.maxWidth * 0.85;
         bool canSendMessage = !_isLoading && (_selectedFile != null || _selectedShape != null);
-        bool hasDownloadableContent = _chatHistory.any((msg) {
+        bool hasDownloadableContent = !_isLoading && _chatHistory.any((msg) {
           final role = msg['role']?.toString().toUpperCase() ?? 'SYSTEM';
           final text = msg['text'] ?? '';
           if (role == 'SYSTEM' &&
@@ -771,13 +798,15 @@ El usuario puede proporcionar:
             actions: [
               IconButton(
                 icon: const Icon(Icons.download_outlined),
-                onPressed: _isLoading || !hasDownloadableContent ? null : _downloadHistory,
+                onPressed: hasDownloadableContent ? _downloadHistory : null,
                 tooltip: 'Descargar historial',
+                color: hasDownloadableContent ? null : Colors.grey,
               ),
               IconButton(
                 icon: const Icon(Icons.delete_outline),
                 onPressed: _isLoading ? null : _clearChat,
                 tooltip: 'Limpiar chat',
+                color: _isLoading ? Colors.grey : null,
               ),
             ],
           ),
@@ -944,8 +973,10 @@ El usuario puede proporcionar:
                                       minimumSize: const Size(60, 30),
                                       tapTargetSize: MaterialTapTargetSize.shrinkWrap),
                                   onPressed: _isLoading ? null : _removeImage,
-                                  child: const Text('Eliminar',
-                                      style: TextStyle(color: Colors.red, fontSize: 13)),
+                                  child: Text('Eliminar',
+                                      style: TextStyle(
+                                          color: _isLoading ? Colors.grey : Colors.red,
+                                          fontSize: 13)),
                                 ),
                               ],
                             ),
@@ -1000,7 +1031,7 @@ El usuario puede proporcionar:
                           IconButton(
                             padding: const EdgeInsets.only(bottom: 8, right: 4),
                             icon: const Icon(Icons.image_search, size: 28),
-                            color: Colors.teal,
+                            color: _isLoading ? Colors.grey : Colors.teal,
                             tooltip: 'Subir Imagen',
                             onPressed: _isLoading ? null : _pickImage,
                           ),

@@ -140,21 +140,6 @@ El usuario puede proporcionar:
     }
   }
 
-  void _addInitialMessage() {
-    final initialMessage = {
-      'role': 'assistant',
-      'text': _chatId != null
-          ? _initialWelcomeMessageText
-          : 'Inicia sesión para guardar y ver tu historial.',
-      'timestamp': Timestamp.now()
-    };
-    if (mounted) setState(() => _chatHistory.add(initialMessage));
-    if (_chatId != null && initialMessage['text'] == _initialWelcomeMessageText) {
-      _saveMessageToFirestore(initialMessage);
-    }
-    _scrollToBottom();
-  }
-
   void _addErrorMessage(String text) {
     final err = {'role': 'system', 'text': text, 'timestamp': Timestamp.now()};
     if (mounted) setState(() => _chatHistory.add(err));
@@ -186,16 +171,15 @@ El usuario puede proporcionar:
         return data;
       }).toList();
 
-      if (newHistory.isEmpty) {
+      if (newHistory.isEmpty && !_isLoading) {
         final initialMessage = {
           'role': 'assistant',
           'text': _initialWelcomeMessageText,
           'timestamp': Timestamp.now(),
         };
-        setState(() {
-          _chatHistory = [initialMessage];
-        });
-        _saveMessageToFirestore(initialMessage);
+        if (_chatHistory.isEmpty || (_chatHistory.length == 1 && _chatHistory.first['text'] != _initialWelcomeMessageText)) {
+          _saveMessageToFirestore(initialMessage);
+        }
       } else {
         setState(() {
           _chatHistory = newHistory;
@@ -206,17 +190,17 @@ El usuario puede proporcionar:
       _scrollToBottom();
     }, onError: (e) {
       print("IEEE Page - Error listening to history: $e");
-      final err = {
-        'role': 'system',
-        'text': 'Error al escuchar el historial: $e',
-        'timestamp': Timestamp.now()
-      };
-      if (mounted) setState(() => _chatHistory.add(err));
+      _addErrorMessage('Error al escuchar el historial: $e');
     });
   }
 
   Future<void> _saveMessageToFirestore(Map<String, dynamic> message) async {
-    if (_chatId == null || message['role'] == 'system') return;
+    if (_chatId == null) return;
+    if (message['role'] == 'system' &&
+        (message['text'].contains('subido:') || message['text'].contains('eliminado'))) {
+      print("IEEE Page - Local UI message not saved: ${message['text']}");
+      return;
+    }
     try {
       final messageToSave = Map<String, dynamic>.from(message)
         ..remove('pdfBytes')
@@ -279,31 +263,25 @@ El usuario puede proporcionar:
       _controller.clear();
     });
     _scrollToBottom();
-    if (_chatId != null) _saveMessageToFirestore(userMessage);
+    if (_chatId != null) {
+      final messageToSave = Map<String, dynamic>.from(userMessage)
+        ..remove('pdfBytes')
+        ..remove('mimeType');
+      _saveMessageToFirestore(messageToSave);
+    }
 
     try {
-      List<Content> conversationHistory = [];
-      for (var message in _chatHistory) {
-        final role = message['role'] as String?;
-        final text = message['text'] as String?;
-        final pdfBytes = message['pdfBytes'] as Uint8List?;
-        final mimeType = message['mimeType'] as String?;
-
-        if (role == 'user') {
-          List<Part> parts = [];
-          if (pdfBytes != null && mimeType != null) {
-            parts.add(DataPart(mimeType, pdfBytes));
-          }
-          if (text != null && text.isNotEmpty) {
-            parts.add(TextPart(text));
-          }
-          if (parts.isNotEmpty) {
-            conversationHistory.add(Content.multi(parts));
-          }
-        } else if (role == 'assistant' && text != null && text.isNotEmpty) {
-          conversationHistory.add(Content.text(text));
+      List<Content> conversationHistory = _chatHistory
+          .where((msg) => msg['role'] == 'user' || msg['role'] == 'assistant')
+          .map((msg) {
+        if (msg['role'] == 'user') {
+          return Content.text(msg['text'] ?? '');
+        } else {
+          return Content.text(msg['text'] ?? '');
         }
-      }
+      }).toList();
+
+      if (conversationHistory.isNotEmpty) conversationHistory.removeLast();
       conversationHistory.add(Content.multi(partsForGemini));
 
       final response = await _model!.generateContent(conversationHistory);
@@ -332,7 +310,14 @@ El usuario puede proporcionar:
     if (!kIsWeb && Platform.isAndroid) {
       final androidInfo = await DeviceInfoPlugin().androidInfo;
       final sdkInt = androidInfo.version.sdkInt ?? 0;
-      if (sdkInt <= 31) {
+      if (sdkInt >= 33) {
+        if (!await Permission.photos.request().isGranted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Permiso para acceder a archivos denegado.')),
+          );
+          return;
+        }
+      } else if (sdkInt <= 31) {
         if (!await Permission.storage.request().isGranted) {
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(content: Text('Permiso para almacenamiento denegado.')),
@@ -357,15 +342,9 @@ El usuario puede proporcionar:
         );
         return;
       }
-      final msg = {
-        'role': 'system',
-        'text': 'PDF subido: ${file.name}',
-        'timestamp': Timestamp.now()
-      };
       setState(() {
         _selectedFile = file;
         _isPreviewExpanded = true;
-        _chatHistory.add(msg);
       });
       _scrollToBottom();
     }
@@ -373,15 +352,9 @@ El usuario puede proporcionar:
 
   void _removeFile() {
     if (_selectedFile != null) {
-      final msg = {
-        'role': 'system',
-        'text': 'PDF eliminado: ${_selectedFile!.name}',
-        'timestamp': Timestamp.now()
-      };
       setState(() {
         _selectedFile = null;
         _isPreviewExpanded = false;
-        _chatHistory.add(msg);
       });
       _scrollToBottom();
     }
@@ -392,7 +365,7 @@ El usuario puede proporcionar:
       context: context,
       builder: (context) => AlertDialog(
         title: const Text('Limpiar Chat IEEE'),
-        content: const Text('¿Estás seguro de que quieres borrar todo el historial?'),
+        content: const Text('¿Estás seguro de que quieres borrar todo el historial de este chat? Esta acción no se puede deshacer.'),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(context).pop(false),
@@ -405,14 +378,17 @@ El usuario puede proporcionar:
         ],
       ),
     );
+
     if (confirm != true) return;
 
-    setState(() {
-      _chatHistory.clear();
-      _selectedFile = null;
-      _isPreviewExpanded = false;
-      _isLoading = true;
-    });
+    if (mounted) {
+      setState(() {
+        _chatHistory.clear();
+        _selectedFile = null;
+        _isPreviewExpanded = false;
+        _isLoading = true;
+      });
+    }
 
     final welcomeMessage = {
       'role': 'assistant',
@@ -423,25 +399,58 @@ El usuario puede proporcionar:
     };
 
     if (_chatId != null) {
+      print("IEEE Page - Clearing Firestore for $_chatId/ieee_messages...");
       try {
         final ref = _firestore.collection('chats').doc(_chatId).collection('ieee_messages');
-        var snapshot = await ref.limit(100).get();
-        while (snapshot.docs.isNotEmpty) {
-          final batch = _firestore.batch();
-          for (var doc in snapshot.docs) batch.delete(doc.reference);
-          await batch.commit();
+        QuerySnapshot snapshot;
+        int deletedCount = 0;
+        do {
           snapshot = await ref.limit(100).get();
+          if (snapshot.docs.isNotEmpty) {
+            final batch = _firestore.batch();
+            for (var doc in snapshot.docs) {
+              batch.delete(doc.reference);
+            }
+            await batch.commit();
+            deletedCount += snapshot.docs.length;
+            print("Lote de ${snapshot.docs.length} mensajes borrado (total: $deletedCount).");
+          }
+        } while (snapshot.docs.isNotEmpty);
+        print("IEEE Page - Firestore history cleared.");
+
+        await _saveMessageToFirestore(welcomeMessage);
+
+        if (mounted) {
+          setState(() {
+            _chatHistory = [welcomeMessage];
+            _isLoading = false;
+          });
         }
-        _saveMessageToFirestore(welcomeMessage);
+        _scrollToBottom();
       } catch (e) {
-        _addErrorMessage('Error limpiando historial: $e');
+        print("IEEE Page - Error clearing Firestore: $e");
+        final err = {
+          'role': 'system',
+          'text': 'Error limpiando historial nube: $e',
+          'timestamp': Timestamp.now()
+        };
+        if (mounted) {
+          setState(() {
+            _chatHistory = [err, welcomeMessage];
+            _isLoading = false;
+          });
+        }
+        _scrollToBottom();
       }
+    } else {
+      if (mounted) {
+        setState(() {
+          _chatHistory = [welcomeMessage];
+          _isLoading = false;
+        });
+      }
+      _scrollToBottom();
     }
-    setState(() {
-      _chatHistory.add(welcomeMessage);
-      _isLoading = false;
-    });
-    _scrollToBottom();
   }
 
   Future<void> _downloadHistory() async {
@@ -520,7 +529,7 @@ El usuario puede proporcionar:
         } else {
           if (mounted) {
             ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(content: Text('Historial guardado en: ${result.split('/').last}')),
+              SnackBar(content: Text('Historial guardado en: ${result.split(Platform.pathSeparator).last}')),
             );
           }
         }
@@ -562,10 +571,10 @@ El usuario puede proporcionar:
     return LayoutBuilder(
       builder: (context, constraints) {
         bool isWideScreen = constraints.maxWidth > 720;
-        double chatBubbleMaxWidth = isWideScreen ? 600 : constraints.maxWidth * 0.8;
+        double chatBubbleMaxWidth = isWideScreen ? 600 : constraints.maxWidth * 0.85;
         bool canSendMessage =
             !_isLoading && (_controller.text.trim().isNotEmpty || _selectedFile != null);
-        bool hasDownloadableContent = _chatHistory.any((msg) {
+        bool hasDownloadableContent = !_isLoading && _chatHistory.any((msg) {
           final role = msg['role']?.toString().toUpperCase() ?? 'SYSTEM';
           final text = msg['text'] ?? '';
           if (role == 'SYSTEM' && (text.contains('subido:') || text.contains('eliminado'))) return false;
@@ -585,13 +594,15 @@ El usuario puede proporcionar:
             actions: [
               IconButton(
                 icon: const Icon(Icons.download_outlined),
-                onPressed: _isLoading || !hasDownloadableContent ? null : _downloadHistory,
+                onPressed: hasDownloadableContent ? _downloadHistory : null,
                 tooltip: 'Descargar historial',
+                color: hasDownloadableContent ? null : Colors.grey,
               ),
               IconButton(
                 icon: const Icon(Icons.delete_outline),
                 onPressed: _isLoading ? null : _clearChat,
                 tooltip: 'Limpiar chat',
+                color: _isLoading ? Colors.grey : null,
               ),
             ],
           ),
@@ -742,8 +753,10 @@ El usuario puede proporcionar:
                                       minimumSize: const Size(60, 30),
                                       tapTargetSize: MaterialTapTargetSize.shrinkWrap),
                                   onPressed: _isLoading ? null : _removeFile,
-                                  child: const Text('Eliminar',
-                                      style: TextStyle(color: Colors.red, fontSize: 13)),
+                                  child: Text('Eliminar',
+                                      style: TextStyle(
+                                          color: _isLoading ? Colors.grey : Colors.red,
+                                          fontSize: 13)),
                                 ),
                               ],
                             ),
@@ -780,7 +793,7 @@ El usuario puede proporcionar:
                       IconButton(
                         padding: const EdgeInsets.only(bottom: 8, right: 4),
                         icon: const Icon(Icons.upload_file_outlined, size: 28),
-                        color: Colors.teal,
+                        color: _isLoading ? Colors.grey : Colors.teal,
                         tooltip: 'Seleccionar PDF',
                         onPressed: _isLoading ? null : _pickFile,
                       ),

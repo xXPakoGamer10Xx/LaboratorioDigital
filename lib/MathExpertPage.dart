@@ -33,10 +33,15 @@ class _MathExpertPageState extends State<MathExpertPage> {
   String? _chatId;
   final ScrollController _scrollController = ScrollController();
   bool _isPreviewExpanded = false;
-  StreamSubscription<QuerySnapshot>? _chatSubscription;
+  Map<String, dynamic>? _pendingUserMessage;
+  bool _initialScrollExecuted = false;
+  int _previousMessageCount = 0;
+  final _textFieldValue = ValueNotifier<String>(''); // Para el ValueListenableBuilder
 
   static const String _initialWelcomeMessageText =
       '¡Bienvenido! Soy tu experto en matemáticas. Pregúntame cualquier cosa sobre matemáticas o sube una imagen de un problema.';
+  static const String _loginPromptMessageText =
+      'Inicia sesión para guardar y ver tu historial.';
   static const String _systemPrompt = """
 Eres un experto en matemáticas altamente calificado. Tu función principal es resolver problemas matemáticos, explicar conceptos matemáticos complejos de manera clara y concisa, y proporcionar ejemplos detallados dentro del ámbito de las matemáticas.
 
@@ -81,33 +86,29 @@ El usuario puede proporcionar:
     print("Math Page - Auth State Init: ${_auth.currentUser?.uid}");
     _setChatIdBasedOnUser();
     print("Math Page - Initial Chat ID: $_chatId");
-    _initializeModelAndLoadHistory();
-    _controller.addListener(() {
-      if (mounted) setState(() {});
-    });
+    _initializeModel();
+    _textFieldValue.value = _controller.text;
   }
 
   void _setChatIdBasedOnUser() {
     User? currentUser = _auth.currentUser;
     if (currentUser != null) {
       _chatId = currentUser.uid;
-      print(
-          "Math Page - Authenticated User: ${currentUser.email}, Chat ID: $_chatId");
+      print("Math Page - Authenticated User: ${currentUser.email}, Chat ID: $_chatId");
     } else {
       _chatId = null;
       print("Math Page - No authenticated user.");
     }
   }
 
-  void _initializeModelAndLoadHistory() async {
+  void _initializeModel() async {
     final apiKey = dotenv.env['GEMINI_API_KEY'];
     if (apiKey == null) {
-      final e = {
-        'role': 'system',
-        'text': 'Error: No se encontró la clave API en .env',
-        'timestamp': Timestamp.now()
-      };
-      if (mounted) setState(() => _chatHistory.add(e));
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Error: No se encontró la clave API en .env')),
+        );
+      }
       return;
     }
     try {
@@ -123,90 +124,30 @@ El usuario puede proporcionar:
         systemInstruction: Content.text(_systemPrompt),
       );
       print("Math Page - Gemini model initialized.");
-      if (_chatId != null) {
-        _listenToChatHistory();
-      } else {
-        final initialMessage = {
-          'role': 'assistant',
-          'text': 'Inicia sesión para guardar y ver tu historial.',
-          'timestamp': Timestamp.now()
-        };
-        if (mounted) {
-          setState(() => _chatHistory.add(initialMessage));
-          _scrollToBottom();
-        }
-      }
     } catch (e) {
       print("Math Page - Error initializing model: $e");
-      final err = {
-        'role': 'system',
-        'text': 'Error al inicializar el asistente: $e',
-        'timestamp': Timestamp.now()
-      };
-      if (mounted) setState(() => _chatHistory.add(err));
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error al inicializar el asistente: $e')),
+        );
+      }
     }
   }
 
-  void _listenToChatHistory() {
-    if (_chatId == null) return;
-    print("Math Page - Starting real-time listener for $_chatId/math_messages");
-
-    _chatSubscription?.cancel();
-
-    _chatSubscription = _firestore
+  Stream<QuerySnapshot<Map<String, dynamic>>>? _getChatStream() {
+    if (_chatId == null) return null;
+    return _firestore
         .collection('chats')
         .doc(_chatId)
         .collection('math_messages')
         .orderBy('timestamp', descending: false)
-        .snapshots()
-        .listen((snapshot) {
-      if (!mounted) return;
-
-      final List<Map<String, dynamic>> newHistory = snapshot.docs.map((doc) {
-        final data = doc.data();
-        data['id'] = doc.id;
-        if (data['timestamp'] == null || data['timestamp'] is! Timestamp) {
-          data['timestamp'] = Timestamp.now();
-          print(
-              "Advertencia: Timestamp inválido encontrado en doc ${doc.id}, usando now()");
-        }
-        return data;
-      }).toList();
-
-      if (newHistory.isEmpty) {
-        final initialMessage = {
-          'role': 'assistant',
-          'text': _initialWelcomeMessageText,
-          'timestamp': Timestamp.now(),
-        };
-        setState(() {
-          _chatHistory = [initialMessage];
-        });
-        _saveMessageToFirestore(initialMessage);
-      } else {
-        setState(() {
-          _chatHistory = newHistory;
-        });
-      }
-
-      print("Math Page - Real-time update: ${_chatHistory.length} messages.");
-      _scrollToBottom();
-    }, onError: (e) {
-      print("Math Page - Error listening to history: $e");
-      final err = {
-        'role': 'system',
-        'text': 'Error al escuchar el historial: $e',
-        'timestamp': Timestamp.now()
-      };
-      if (mounted) setState(() => _chatHistory.add(err));
-    });
+        .snapshots();
   }
 
   Future<void> _saveMessageToFirestore(Map<String, dynamic> message) async {
     if (_chatId == null) return;
     if (message['role'] == 'system' &&
-        (message['text'].contains('subida:') ||
-            message['text'].contains('eliminada'))) {
+        (message['text'].contains('subida:') || message['text'].contains('eliminada'))) {
       print("Math Page - Local UI message not saved: ${message['text']}");
       return;
     }
@@ -216,8 +157,7 @@ El usuario puede proporcionar:
       messageToSave.remove('isExpanded');
       messageToSave.remove('imageBytes');
       messageToSave['timestamp'] = FieldValue.serverTimestamp();
-      print(
-          "Math Page - Saving message to Firestore (${_chatId}/math_messages): ${messageToSave['role']}");
+      print("Math Page - Saving message to Firestore: ${messageToSave['role']}");
       await _firestore
           .collection('chats')
           .doc(_chatId)
@@ -230,66 +170,64 @@ El usuario puede proporcionar:
 
   Future<void> _generateResponse(String userPrompt) async {
     if (_model == null) {
-      final err = {
-        'role': 'system',
-        'text': 'Error: Modelo no inicializado.',
-        'timestamp': Timestamp.now()
-      };
-      if (mounted) setState(() => _chatHistory.add(err));
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Error: Modelo no inicializado.')),
+        );
+      }
       return;
     }
     if (userPrompt.trim().isEmpty && _selectedFile == null) {
-      final err = {
-        'role': 'system',
-        'text': 'Por favor, ingresa una pregunta o selecciona una imagen.',
-        'timestamp': Timestamp.now()
-      };
-      if (mounted) setState(() => _chatHistory.add(err));
-      _scrollToBottom();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Por favor, ingresa una pregunta o selecciona una imagen.')),
+        );
+      }
+      _scrollToBottom(jump: false);
       return;
     }
-    if (mounted) setState(() => _isLoading = true);
+
+    setState(() => _isLoading = true);
 
     Map<String, dynamic> userMessageForHistory = {
       'role': 'user',
       'text': userPrompt.trim(),
-      'timestamp': Timestamp.now(),
+      'timestamp': DateTime.now(),
     };
     List<Part> partsForGemini = [];
+
+    Uint8List? imageBytesForHistory;
+    String? mimeTypeForHistory;
 
     if (_selectedFile != null) {
       userMessageForHistory['fileName'] = _selectedFile!.name;
       try {
         Uint8List imageBytes;
         if (kIsWeb) {
-          if (_selectedFile!.bytes == null)
-            throw Exception("Bytes de imagen no disponibles en web.");
+          if (_selectedFile!.bytes == null) throw Exception("Bytes de imagen no disponibles en web.");
           imageBytes = _selectedFile!.bytes!;
         } else {
-          if (_selectedFile!.path == null)
-            throw Exception("Ruta de imagen no disponible en móvil.");
+          if (_selectedFile!.path == null) throw Exception("Ruta de imagen no disponible en móvil.");
           imageBytes = await File(_selectedFile!.path!).readAsBytes();
         }
-        if (imageBytes.isEmpty)
-          throw Exception("El archivo de imagen está vacío o corrupto.");
+        if (imageBytes.isEmpty) throw Exception("El archivo de imagen está vacío o corrupto.");
+
         String mimeType = 'image/jpeg';
         final extension = _selectedFile!.extension?.toLowerCase();
-        if (extension == 'png')
-          mimeType = 'image/png';
-        else if (extension == 'webp')
-          mimeType = 'image/webp';
-        else if (extension == 'gif')
-          mimeType = 'image/gif';
+        if (extension == 'png') mimeType = 'image/png';
+        else if (extension == 'webp') mimeType = 'image/webp';
+        else if (extension == 'gif') mimeType = 'image/gif';
         else if (extension == 'heic') mimeType = 'image/heic';
+
         partsForGemini.add(DataPart(mimeType, imageBytes));
-        userMessageForHistory['imageBytes'] = imageBytes;
-        userMessageForHistory['mimeType'] = mimeType;
+        imageBytesForHistory = imageBytes;
+        mimeTypeForHistory = mimeType;
       } catch (e) {
-        print("Math Page - Error leyendo/procesando imagen: $e");
+        print("Math Page - Error procesando imagen: $e");
         final err = {
           'role': 'system',
           'text': 'Error procesando imagen: $e',
-          'timestamp': Timestamp.now()
+          'timestamp': DateTime.now(),
         };
         if (mounted) {
           setState(() {
@@ -300,7 +238,7 @@ El usuario puede proporcionar:
           });
         }
         if (_chatId != null) _saveMessageToFirestore(err);
-        _scrollToBottom();
+        _scrollToBottom(jump: false);
         return;
       }
     }
@@ -309,65 +247,66 @@ El usuario puede proporcionar:
       partsForGemini.add(TextPart(userPrompt.trim()));
     }
 
-    if (mounted) {
-      setState(() {
-        _chatHistory.add(userMessageForHistory);
-        _controller.clear();
-      });
-      _scrollToBottom();
+    if (imageBytesForHistory != null) {
+      userMessageForHistory['imageBytes'] = imageBytesForHistory;
+      userMessageForHistory['mimeType'] = mimeTypeForHistory;
     }
-    if (_chatId != null) _saveMessageToFirestore(userMessageForHistory);
+
+    setState(() {
+      _chatHistory.add(userMessageForHistory);
+      _pendingUserMessage = null;
+      _controller.clear();
+    });
+    _scrollToBottom(jump: false);
+
+    if (_chatId != null) {
+      final messageToSave = Map<String, dynamic>.from(userMessageForHistory);
+      messageToSave.remove('imageBytes');
+      messageToSave.remove('mimeType');
+      await _saveMessageToFirestore(messageToSave);
+    }
 
     if (partsForGemini.isEmpty) {
-      if (mounted) setState(() => _isLoading = false);
+      setState(() => _isLoading = false);
       return;
     }
 
     try {
-      List<Content> conversationHistory = [];
-      for (var message in _chatHistory) {
-        final role = message['role'] as String?;
-        final text = message['text'] as String?;
-        final imageBytes = message['imageBytes'] as Uint8List?;
-        final mimeType = message['mimeType'] as String?;
-
-        if (role == 'user') {
-          List<Part> parts = [];
-          if (imageBytes != null && mimeType != null) {
-            parts.add(DataPart(mimeType, imageBytes));
-          }
-          if (text != null && text.isNotEmpty) {
-            parts.add(TextPart(text));
-          }
-          if (parts.isNotEmpty) {
-            conversationHistory.add(Content.multi(parts));
-          }
-        } else if (role == 'assistant' && text != null && text.isNotEmpty) {
-          conversationHistory.add(Content.text(text));
+      List<Content> conversationHistoryForGemini = _chatHistory
+          .where((msg) => msg['role'] == 'user' || msg['role'] == 'assistant')
+          .map((msg) {
+        if (msg['fileName'] != null) {
+          return Content.text("${msg['text'] ?? ''}\n[Imagen adjunta: ${msg['fileName']}]");
         }
-      }
+        return Content.text(msg['text'] ?? '');
+      })
+          .toList();
 
-      conversationHistory.add(Content.multi(partsForGemini));
+      print("Math Page - Sending content to Gemini with history: $conversationHistoryForGemini");
+      final response = await _model!.generateContent([
+        ...conversationHistoryForGemini,
+        Content.multi(partsForGemini),
+      ]);
 
-      print(
-          "Math Page - Sending ${conversationHistory.length} content items to Gemini...");
-      final response = await _model!.generateContent(conversationHistory);
-      print("Math Page - Response received.");
-      final assistantResponseText =
-          response.text ?? 'El asistente no proporcionó respuesta.';
+      print("Math Page - Response received: ${response.text}");
       final assistantMessage = {
         'role': 'assistant',
-        'text': assistantResponseText,
-        'timestamp': Timestamp.now(),
+        'text': response.text ?? 'El asistente no proporcionó respuesta.',
+        'timestamp': DateTime.now(),
       };
-      if (mounted) setState(() => _chatHistory.add(assistantMessage));
-      if (_chatId != null) _saveMessageToFirestore(assistantMessage);
+
+      setState(() {
+        _chatHistory.add(assistantMessage);
+      });
+      _scrollToBottom(jump: false);
+
+      if (_chatId != null) await _saveMessageToFirestore(assistantMessage);
     } catch (e) {
       print("Math Page - Error generating response: $e");
       final err = {
         'role': 'system',
         'text': 'Error al contactar al asistente: $e',
-        'timestamp': Timestamp.now()
+        'timestamp': DateTime.now(),
       };
       if (mounted) setState(() => _chatHistory.add(err));
       if (_chatId != null) _saveMessageToFirestore(err);
@@ -378,37 +317,37 @@ El usuario puede proporcionar:
           _selectedFile = null;
           _isPreviewExpanded = false;
         });
-        _scrollToBottom();
+        _scrollToBottom(jump: false);
       }
     }
   }
 
   Future<void> _pickImage() async {
     try {
+      bool permissionGranted = false;
       if (!kIsWeb && Platform.isAndroid) {
         final androidInfo = await DeviceInfoPlugin().androidInfo;
-        final sdkInt = androidInfo.version.sdkInt ?? 0;
+        final sdkInt = androidInfo.version.sdkInt;
+        print("Android SDK: $sdkInt");
         if (sdkInt >= 33) {
-          if (!await Permission.photos.request().isGranted) {
-            if (mounted) {
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(
-                    content: Text('Permiso para acceder a imágenes denegado.')),
-              );
-            }
-            return;
-          }
+          permissionGranted = await Permission.photos.request().isGranted;
+          print("Photos Permission Granted (SDK >= 33): $permissionGranted");
         } else {
-          if (!await Permission.storage.request().isGranted) {
-            if (mounted) {
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(
-                    content: Text('Permiso para acceder a imágenes denegado.')),
-              );
-            }
-            return;
-          }
+          permissionGranted = await Permission.storage.request().isGranted;
+          print("Storage Permission Granted (SDK < 33): $permissionGranted");
         }
+      } else {
+        permissionGranted = true;
+      }
+
+      if (!permissionGranted) {
+        print("Permiso denegado por el usuario.");
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Permiso para acceder a imágenes denegado.')),
+          );
+        }
+        return;
       }
 
       final result = await FilePicker.platform.pickFiles(
@@ -417,31 +356,31 @@ El usuario puede proporcionar:
         withData: kIsWeb,
       );
 
-      if (result != null && result.files.isNotEmpty && mounted) {
+      if (result != null && result.files.isNotEmpty) {
         final file = result.files.first;
 
         if (file.size > 5 * 1024 * 1024) {
           if (mounted) {
             ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(
-                  content: Text('La imagen excede el límite de 5MB.')),
+              const SnackBar(content: Text('La imagen excede el límite de 5MB.')),
             );
           }
           return;
         }
 
-        final msg = {
-          'role': 'system',
-          'text': 'Imagen subida: ${file.name}',
-          'timestamp': Timestamp.now()
-        };
-        setState(() {
-          _selectedFile = file;
-          _isPreviewExpanded = true;
-          _chatHistory.add(msg);
-        });
-        _scrollToBottom();
-        print("Math Page - Image selected: ${_selectedFile?.name}");
+        if (mounted) {
+          setState(() {
+            _selectedFile = file;
+            _isPreviewExpanded = true;
+            _chatHistory.add({
+              'role': 'system',
+              'text': 'Imagen subida: ${file.name}',
+              'timestamp': DateTime.now(),
+            });
+          });
+          _scrollToBottom(jump: false);
+          print("Math Page - Image selected: ${_selectedFile?.name}");
+        }
       } else {
         print("Math Page - Image selection cancelled.");
       }
@@ -457,17 +396,16 @@ El usuario puede proporcionar:
 
   void _removeImage() {
     if (mounted && _selectedFile != null) {
-      final msg = {
-        'role': 'system',
-        'text': 'Imagen eliminada: ${_selectedFile!.name}',
-        'timestamp': Timestamp.now()
-      };
       setState(() {
+        _chatHistory.add({
+          'role': 'system',
+          'text': 'Imagen eliminada: ${_selectedFile!.name}',
+          'timestamp': DateTime.now(),
+        });
         _selectedFile = null;
         _isPreviewExpanded = false;
-        _chatHistory.add(msg);
       });
-      _scrollToBottom();
+      _scrollToBottom(jump: false);
       print("Math Page - Selected image removed.");
     }
   }
@@ -477,8 +415,7 @@ El usuario puede proporcionar:
       context: context,
       builder: (context) => AlertDialog(
         title: const Text('Limpiar Chat de Matemáticas'),
-        content: const Text(
-            '¿Estás seguro de que quieres borrar todo el historial de este chat? Esta acción no se puede deshacer.'),
+        content: const Text('¿Estás seguro de que quieres borrar todo el historial de este chat? Esta acción no se puede deshacer.'),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(context).pop(false),
@@ -491,33 +428,23 @@ El usuario puede proporcionar:
         ],
       ),
     );
+
     if (confirm != true) return;
 
-    if (mounted) {
-      setState(() {
-        _chatHistory.clear();
-        _selectedFile = null;
-        _isPreviewExpanded = false;
-        _isLoading = true;
-      });
-    }
+    if (mounted) setState(() => _isLoading = true);
 
     final welcomeMessage = {
       'role': 'assistant',
-      'text': _chatId != null
-          ? _initialWelcomeMessageText
-          : 'Inicia sesión para guardar y ver tu historial.',
-      'timestamp': Timestamp.now(),
+      'text': _chatId != null ? _initialWelcomeMessageText : _loginPromptMessageText,
+      'timestamp': DateTime.now(),
     };
 
     if (_chatId != null) {
       print("Math Page - Clearing Firestore for $_chatId/math_messages...");
       try {
-        final ref = _firestore
-            .collection('chats')
-            .doc(_chatId)
-            .collection('math_messages');
+        final ref = _firestore.collection('chats').doc(_chatId).collection('math_messages');
         QuerySnapshot snapshot;
+        int deletedCount = 0;
         do {
           snapshot = await ref.limit(100).get();
           if (snapshot.docs.isNotEmpty) {
@@ -526,36 +453,45 @@ El usuario puede proporcionar:
               batch.delete(doc.reference);
             }
             await batch.commit();
-            print("Lote de ${snapshot.docs.length} mensajes borrado.");
+            deletedCount += snapshot.docs.length;
+            print("Lote de ${snapshot.docs.length} mensajes borrado (total: $deletedCount).");
           }
         } while (snapshot.docs.isNotEmpty);
         print("Math Page - Firestore history cleared.");
 
-        _saveMessageToFirestore(welcomeMessage);
-        if (mounted) setState(() => _chatHistory.add(welcomeMessage));
+        await _saveMessageToFirestore(welcomeMessage);
+
+        if (mounted) {
+          setState(() {
+            _chatHistory = [welcomeMessage];
+            _isLoading = false;
+            _initialScrollExecuted = false;
+          });
+        }
+        _scrollToBottom(jump: true);
       } catch (e) {
         print("Math Page - Error clearing Firestore: $e");
         final err = {
           'role': 'system',
           'text': 'Error limpiando historial nube: $e',
-          'timestamp': Timestamp.now()
+          'timestamp': DateTime.now(),
         };
         if (mounted) {
           setState(() {
-            _chatHistory.add(err);
-            if (_chatHistory.where((m) => m['role'] == 'assistant').isEmpty) {
-              _chatHistory.add(welcomeMessage);
-            }
+            _chatHistory = [err, welcomeMessage];
+            _isLoading = false;
           });
         }
+        _scrollToBottom(jump: true);
       }
     } else {
-      if (mounted) setState(() => _chatHistory.add(welcomeMessage));
-    }
-
-    if (mounted) {
-      setState(() => _isLoading = false);
-      _scrollToBottom();
+      if (mounted) {
+        setState(() {
+          _chatHistory = [welcomeMessage];
+          _isLoading = false;
+        });
+      }
+      _scrollToBottom(jump: true);
     }
   }
 
@@ -571,16 +507,16 @@ El usuario puede proporcionar:
         return false;
       }
       if (role == 'ASSISTANT' &&
-          (text == _initialWelcomeMessageText ||
-              text == 'Inicia sesión para guardar y ver tu historial.'))
+          (text == _initialWelcomeMessageText || text == 'Inicia sesión para guardar y ver tu historial.'))
         return false;
       return true;
     }).toList();
 
     if (downloadableHistory.isEmpty) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-            content: Text('No hay historial relevante para descargar.')));
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('No hay historial relevante para descargar.')),
+        );
       }
       return;
     }
@@ -591,8 +527,7 @@ El usuario puede proporcionar:
       final StringBuffer buffer = StringBuffer();
       buffer.writeln("Historial del Chat de Matemáticas");
       buffer.writeln("=" * 30);
-      buffer.writeln(
-          "Exportado el: ${DateFormat('yyyy-MM-dd HH:mm:ss').format(DateTime.now().toLocal())}");
+      buffer.writeln("Exportado el: ${DateFormat('yyyy-MM-dd HH:mm:ss').format(DateTime.now().toLocal())}");
       buffer.writeln();
       final DateFormat formatter = DateFormat('yyyy-MM-dd HH:mm:ss');
 
@@ -601,15 +536,20 @@ El usuario puede proporcionar:
         final text = message['text'] ?? '';
         dynamic ts = message['timestamp'];
         String timestampStr = 'N/A';
+
         try {
           if (ts is Timestamp) {
             timestampStr = formatter.format(ts.toDate().toLocal());
           } else if (ts is DateTime) {
             timestampStr = formatter.format(ts.toLocal());
+          } else {
+            timestampStr = formatter.format(DateTime.now().toLocal());
           }
         } catch (e) {
-          print("Error formateando timestamp: $e");
+          print("Error formateando timestamp para descarga: $e");
+          timestampStr = formatter.format(DateTime.now().toLocal());
         }
+
         buffer.writeln("[$timestampStr] $role:");
         buffer.writeln(text);
         if (message['fileName'] != null) {
@@ -619,8 +559,7 @@ El usuario puede proporcionar:
       }
 
       final String fileContent = buffer.toString();
-      final String fileName =
-          'historial_matematicas_${DateFormat('yyyyMMdd_HHmmss').format(DateTime.now())}.txt';
+      final String fileName = 'historial_matematicas_${DateFormat('yyyyMMdd_HHmmss').format(DateTime.now())}.txt';
       final List<int> fileBytes = utf8.encode(fileContent);
 
       if (kIsWeb) {
@@ -632,15 +571,17 @@ El usuario puede proporcionar:
         html.Url.revokeObjectUrl(url);
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(content: Text('Descarga iniciada (Web).')));
+            const SnackBar(content: Text('Descarga iniciada (Web).')),
+          );
         }
       } else {
-        final result = await FilePicker.platform.saveFile(
+        String? outputFile = await FilePicker.platform.saveFile(
           dialogTitle: 'Guardar Historial Matemáticas',
           fileName: fileName,
           bytes: Uint8List.fromList(fileBytes),
         );
-        if (result == null) {
+
+        if (outputFile == null) {
           if (mounted) {
             ScaffoldMessenger.of(context).showSnackBar(
               const SnackBar(content: Text('Guardado cancelado.')),
@@ -648,10 +589,9 @@ El usuario puede proporcionar:
           }
         } else {
           if (mounted) {
+            final savedFileName = outputFile.split(Platform.pathSeparator).last;
             ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(
-                  content:
-                      Text('Historial guardado en: ${result.split('/').last}')),
+              SnackBar(content: Text('Historial guardado como: $savedFileName')),
             );
           }
         }
@@ -660,7 +600,8 @@ El usuario puede proporcionar:
       print("Error general al descargar (Math): $e");
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('Error al preparar la descarga: $e')));
+          SnackBar(content: Text('Error al preparar la descarga: $e')),
+        );
       }
     } finally {
       if (mounted) setState(() => _isLoading = false);
@@ -671,21 +612,26 @@ El usuario puede proporcionar:
   void dispose() {
     _controller.dispose();
     _scrollController.dispose();
-    _chatSubscription?.cancel();
+    _textFieldValue.dispose();
     super.dispose();
   }
 
-  void _scrollToBottom() {
+  void _scrollToBottom({required bool jump}) {
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      Future.delayed(const Duration(milliseconds: 100), () {
-        if (_scrollController.hasClients) {
+      if (_scrollController.hasClients) {
+        final maxExtent = _scrollController.position.maxScrollExtent;
+        if (jump) {
+          _scrollController.jumpTo(maxExtent);
+        } else {
           _scrollController.animateTo(
-            _scrollController.position.maxScrollExtent,
+            maxExtent,
             duration: const Duration(milliseconds: 300),
             curve: Curves.easeOut,
           );
         }
-      });
+      } else {
+        Future.delayed(const Duration(milliseconds: 100), () => _scrollToBottom(jump: jump));
+      }
     });
   }
 
@@ -694,24 +640,12 @@ El usuario puede proporcionar:
     return LayoutBuilder(
       builder: (context, constraints) {
         bool isWideScreen = constraints.maxWidth > 720;
-        double chatBubbleMaxWidth =
-            isWideScreen ? 600 : constraints.maxWidth * 0.8;
-
-        bool canSendMessage = !_isLoading &&
-            (_controller.text.trim().isNotEmpty || _selectedFile != null);
-
-        bool hasDownloadableContent = _chatHistory.any((msg) {
+        double chatBubbleMaxWidth = isWideScreen ? 600 : constraints.maxWidth * 0.85;
+        bool hasDownloadableContent = !_isLoading && _chatHistory.any((msg) {
           final role = msg['role']?.toString().toUpperCase() ?? 'SYSTEM';
           final text = msg['text'] ?? '';
-          if (role == 'SYSTEM' &&
-              (text.contains('subida:') ||
-                  text.contains('eliminada:') ||
-                  text.contains('inicializada') ||
-                  text.contains('Error:'))) return false;
-          if (role == 'ASSISTANT' &&
-              (text == _initialWelcomeMessageText ||
-                  text == 'Inicia sesión para guardar y ver tu historial.'))
-            return false;
+          if (role == 'SYSTEM' && (text.contains('subida:') || text.contains('eliminada:') || text.contains('Error:'))) return false;
+          if (role == 'ASSISTANT' && (text == _initialWelcomeMessageText || text == _loginPromptMessageText)) return false;
           return true;
         });
 
@@ -722,21 +656,20 @@ El usuario puede proporcionar:
             elevation: 1,
             leading: IconButton(
               icon: const Icon(Icons.arrow_back),
-              onPressed: () =>
-                  Navigator.canPop(context) ? Navigator.pop(context) : null,
+              onPressed: () => Navigator.canPop(context) ? Navigator.pop(context) : null,
             ),
             actions: [
               IconButton(
                 icon: const Icon(Icons.download_outlined),
-                onPressed: (_isLoading || !hasDownloadableContent)
-                    ? null
-                    : _downloadHistory,
+                onPressed: hasDownloadableContent ? _downloadHistory : null,
                 tooltip: 'Descargar historial',
+                color: hasDownloadableContent ? null : Colors.grey,
               ),
               IconButton(
                 icon: const Icon(Icons.delete_outline),
                 onPressed: _isLoading ? null : _clearChat,
                 tooltip: 'Limpiar chat',
+                color: _isLoading ? Colors.grey : null,
               ),
             ],
           ),
@@ -744,153 +677,200 @@ El usuario puede proporcionar:
             child: Column(
               children: [
                 Expanded(
-                  child: ListView.builder(
-                    controller: _scrollController,
-                    padding: EdgeInsets.symmetric(
-                        horizontal: isWideScreen ? 24.0 : 16.0, vertical: 16.0),
-                    itemCount: _chatHistory.length,
-                    itemBuilder: (context, index) {
-                      final message = _chatHistory[index];
-                      final role = message['role'] as String? ?? 'system';
-                      final text = message['text'] as String? ?? '';
-                      final fileName = message['fileName'] as String?;
-                      final imageBytes = message['imageBytes'] as Uint8List?;
-                      final isUser = role == 'user';
-                      final isSystem = role == 'system';
-                      Color backgroundColor;
-                      Color textColor;
-                      Alignment alignment;
-                      TextAlign textAlign;
-                      if (isUser) {
-                        backgroundColor = Colors.teal[100]!;
-                        textColor = Colors.teal[900]!;
-                        alignment = Alignment.centerRight;
-                        textAlign = TextAlign.left;
-                      } else if (isSystem) {
-                        backgroundColor = Colors.orange[100]!;
-                        textColor = Colors.orange[900]!;
-                        alignment = Alignment.center;
-                        textAlign = TextAlign.center;
+                  child: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+                    stream: _getChatStream(),
+                    builder: (context, snapshot) {
+                      if (snapshot.connectionState == ConnectionState.waiting && _chatId != null) {
+                        return const Center(child: CircularProgressIndicator());
+                      }
+                      if (snapshot.hasError) {
+                        print("Math Page - StreamBuilder Error: ${snapshot.error}");
+                        return Center(child: Text('Error al cargar mensajes: ${snapshot.error}'));
+                      }
+                      if (_chatId == null) {
+                        if (_chatHistory.isEmpty) {
+                          _chatHistory.add({
+                            'role': 'assistant',
+                            'text': _loginPromptMessageText,
+                            'timestamp': DateTime.now(),
+                          });
+                        }
+                      }
+
+                      final List<Map<String, dynamic>> messagesFromStream;
+                      if (snapshot.hasData && snapshot.data!.docs.isNotEmpty) {
+                        messagesFromStream = snapshot.data!.docs.map((doc) {
+                          final data = doc.data();
+                          data['id'] = doc.id;
+                          if (data['timestamp'] is Timestamp) {
+                            data['timestamp'] = (data['timestamp'] as Timestamp).toDate();
+                          } else if (data['timestamp'] is! DateTime) {
+                            data['timestamp'] = DateTime.now();
+                          }
+                          return data;
+                        }).toList();
+                        _chatHistory = messagesFromStream; // Sincronizar con Firestore
                       } else {
-                        backgroundColor = Colors.grey[200]!;
-                        textColor = Colors.black87;
-                        alignment = Alignment.centerLeft;
-                        textAlign = TextAlign.left;
+                        messagesFromStream = [];
+                        if (_chatHistory.isEmpty) {
+                          _chatHistory.add({
+                            'role': 'assistant',
+                            'text': _initialWelcomeMessageText,
+                            'timestamp': DateTime.now(),
+                          });
+                        }
                       }
-                      if (isSystem &&
-                          (text.contains('subida:') ||
-                              text.contains('eliminada:'))) {
-                        return const SizedBox.shrink();
+
+                      final allMessages = [..._chatHistory];
+                      if (_pendingUserMessage != null) {
+                        allMessages.add(_pendingUserMessage!);
+                        allMessages.sort((a, b) {
+                          DateTime aTime = a['timestamp'] is Timestamp ? (a['timestamp'] as Timestamp).toDate() : a['timestamp'] as DateTime;
+                          DateTime bTime = b['timestamp'] is Timestamp ? (b['timestamp'] as Timestamp).toDate() : b['timestamp'] as DateTime;
+                          return aTime.compareTo(bTime);
+                        });
                       }
-                      return Align(
-                        alignment: alignment,
-                        child: Container(
-                          margin: const EdgeInsets.symmetric(vertical: 5.0),
-                          padding: const EdgeInsets.symmetric(
-                              horizontal: 14.0, vertical: 10.0),
-                          decoration: BoxDecoration(
-                            color: backgroundColor,
-                            borderRadius: BorderRadius.circular(16.0),
-                            boxShadow: [
-                              BoxShadow(
-                                color: Colors.grey.withOpacity(0.2),
-                                spreadRadius: 1,
-                                blurRadius: 2,
-                                offset: const Offset(0, 1),
-                              ),
-                            ],
-                          ),
-                          constraints:
-                              BoxConstraints(maxWidth: chatBubbleMaxWidth),
-                          child: Column(
-                            crossAxisAlignment: isSystem
-                                ? CrossAxisAlignment.center
-                                : CrossAxisAlignment.start,
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              if (isUser &&
-                                  fileName != null &&
-                                  imageBytes != null)
-                                Padding(
-                                  padding: const EdgeInsets.only(bottom: 6.0),
-                                  child: Column(
-                                    crossAxisAlignment:
-                                        CrossAxisAlignment.start,
-                                    children: [
-                                      Row(
-                                        mainAxisSize: MainAxisSize.min,
-                                        children: [
-                                          Icon(Icons.image_outlined,
-                                              size: 16,
-                                              color:
-                                                  textColor.withOpacity(0.8)),
-                                          const SizedBox(width: 4),
-                                          Flexible(
-                                            child: Text(
-                                              fileName,
-                                              style: TextStyle(
-                                                  fontSize: 13,
-                                                  fontStyle: FontStyle.italic,
-                                                  color: textColor
-                                                      .withOpacity(0.8)),
-                                              overflow: TextOverflow.ellipsis,
+
+                      final currentMessageCount = allMessages.length;
+                      if (currentMessageCount > 0 && !_initialScrollExecuted) {
+                        print("Math Page - Initial load ($currentMessageCount messages).");
+                        WidgetsBinding.instance.addPostFrameCallback((_) => _scrollToBottom(jump: true));
+                        _initialScrollExecuted = true;
+                      } else if (currentMessageCount > _previousMessageCount && _initialScrollExecuted) {
+                        print("Math Page - New message ($currentMessageCount > $_previousMessageCount).");
+                        WidgetsBinding.instance.addPostFrameCallback((_) => _scrollToBottom(jump: false));
+                      }
+                      _previousMessageCount = currentMessageCount;
+
+                      return AnimatedSwitcher(
+                        duration: const Duration(milliseconds: 300),
+                        child: ListView.builder(
+                          key: ValueKey(allMessages.length),
+                          controller: _scrollController,
+                          padding: EdgeInsets.symmetric(horizontal: isWideScreen ? 24.0 : 16.0, vertical: 16.0),
+                          itemCount: allMessages.length,
+                          itemBuilder: (context, index) {
+                            final message = allMessages[index];
+                            final role = message['role'] as String? ?? 'system';
+                            final text = message['text'] as String? ?? '';
+                            final fileName = message['fileName'] as String?;
+                            final imageBytes = message['imageBytes'] as Uint8List?;
+                            final isUser = role == 'user';
+                            final isSystem = role == 'system';
+
+                            final key = ValueKey(message['id'] ?? message['timestamp'].toString());
+
+                            Color backgroundColor;
+                            Color textColor;
+                            Alignment alignment;
+                            TextAlign textAlign;
+                            CrossAxisAlignment crossAxisAlignment;
+
+                            if (isUser) {
+                              backgroundColor = Colors.teal[100]!;
+                              textColor = Colors.teal[900]!;
+                              alignment = Alignment.centerRight;
+                              textAlign = TextAlign.left;
+                              crossAxisAlignment = CrossAxisAlignment.start;
+                            } else if (isSystem) {
+                              backgroundColor = Colors.orange[100]!;
+                              textColor = Colors.orange[900]!;
+                              alignment = Alignment.center;
+                              textAlign = TextAlign.center;
+                              crossAxisAlignment = CrossAxisAlignment.center;
+                            } else {
+                              backgroundColor = Colors.grey[200]!;
+                              textColor = Colors.black87;
+                              alignment = Alignment.centerLeft;
+                              textAlign = TextAlign.left;
+                              crossAxisAlignment = CrossAxisAlignment.start;
+                            }
+
+                            if (isSystem && (text.contains('subida:') || text.contains('eliminada:'))) {
+                              return const SizedBox.shrink();
+                            }
+
+                            return Align(
+                              key: key,
+                              alignment: alignment,
+                              child: Container(
+                                margin: const EdgeInsets.symmetric(vertical: 5.0),
+                                padding: const EdgeInsets.symmetric(horizontal: 14.0, vertical: 10.0),
+                                decoration: BoxDecoration(
+                                  color: backgroundColor,
+                                  borderRadius: BorderRadius.circular(16.0),
+                                  boxShadow: [
+                                    BoxShadow(
+                                      color: Colors.grey.withOpacity(0.2),
+                                      spreadRadius: 1,
+                                      blurRadius: 2,
+                                      offset: const Offset(0, 1),
+                                    ),
+                                  ],
+                                ),
+                                constraints: BoxConstraints(maxWidth: chatBubbleMaxWidth),
+                                child: Column(
+                                  crossAxisAlignment: crossAxisAlignment,
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    if (isUser && fileName != null && imageBytes != null)
+                                      Padding(
+                                        padding: const EdgeInsets.only(bottom: 8.0),
+                                        child: Column(
+                                          crossAxisAlignment: CrossAxisAlignment.start,
+                                          children: [
+                                            Row(
+                                              mainAxisSize: MainAxisSize.min,
+                                              children: [
+                                                Icon(Icons.image_outlined, size: 16, color: textColor.withOpacity(0.8)),
+                                                const SizedBox(width: 4),
+                                                Flexible(
+                                                  child: Text(
+                                                    fileName,
+                                                    style: TextStyle(fontSize: 13, fontStyle: FontStyle.italic, color: textColor.withOpacity(0.8)),
+                                                    overflow: TextOverflow.ellipsis,
+                                                  ),
+                                                ),
+                                              ],
                                             ),
-                                          ),
-                                        ],
-                                      ),
-                                      const SizedBox(height: 6),
-                                      ClipRRect(
-                                        borderRadius: BorderRadius.circular(8),
-                                        child: Image.memory(
-                                          imageBytes,
-                                          fit: BoxFit.contain,
-                                          height: 100,
-                                          errorBuilder: (c, e, s) => const Text(
-                                              'Error al mostrar imagen'),
+                                            const SizedBox(height: 6),
+                                            ClipRRect(
+                                              borderRadius: BorderRadius.circular(8),
+                                              child: Image.memory(
+                                                imageBytes,
+                                                fit: BoxFit.contain,
+                                                height: 100,
+                                                errorBuilder: (c, e, s) => const Text('Error al mostrar imagen'),
+                                              ),
+                                            ),
+                                          ],
                                         ),
                                       ),
-                                    ],
-                                  ),
-                                ),
-                              if (text.isNotEmpty)
-                                (role == 'assistant')
-                                    ? MarkdownBody(
+                                    if (text.isNotEmpty)
+                                      (role == 'assistant')
+                                          ? MarkdownBody(
                                         data: text,
                                         selectable: true,
-                                        styleSheet:
-                                            MarkdownStyleSheet.fromTheme(
-                                                    Theme.of(context))
-                                                .copyWith(
-                                          p: Theme.of(context)
-                                              .textTheme
-                                              .bodyMedium
-                                              ?.copyWith(
-                                                  color: textColor,
-                                                  height: 1.4),
-                                          code: Theme.of(context)
-                                              .textTheme
-                                              .bodyMedium
-                                              ?.copyWith(
-                                                  fontFamily: 'monospace',
-                                                  backgroundColor:
-                                                      Colors.black12,
-                                                  color: textColor),
+                                        styleSheet: MarkdownStyleSheet.fromTheme(Theme.of(context)).copyWith(
+                                          p: Theme.of(context).textTheme.bodyMedium?.copyWith(color: textColor, height: 1.4),
+                                          code: Theme.of(context).textTheme.bodyMedium?.copyWith(fontFamily: 'monospace', backgroundColor: Colors.black12, color: textColor),
                                         ),
                                       )
-                                    : SelectableText(
+                                          : SelectableText(
                                         text,
                                         textAlign: textAlign,
                                         style: TextStyle(
                                           color: textColor,
-                                          fontStyle: isSystem
-                                              ? FontStyle.italic
-                                              : FontStyle.normal,
+                                          fontStyle: isSystem ? FontStyle.italic : FontStyle.normal,
                                           fontSize: isSystem ? 13 : 16,
                                           height: 1.4,
                                         ),
                                       ),
-                            ],
-                          ),
+                                  ],
+                                ),
+                              ),
+                            );
+                          },
                         ),
                       );
                     },
@@ -898,57 +878,29 @@ El usuario puede proporcionar:
                 ),
                 if (_selectedFile != null)
                   Padding(
-                    padding: EdgeInsets.fromLTRB(isWideScreen ? 24.0 : 8.0, 0,
-                        isWideScreen ? 24.0 : 8.0, 8.0),
+                    padding: EdgeInsets.fromLTRB(isWideScreen ? 24.0 : 8.0, 0, isWideScreen ? 24.0 : 8.0, 8.0),
                     child: Card(
                       elevation: 2,
                       margin: EdgeInsets.zero,
-                      shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(12)),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                       child: Padding(
                         padding: const EdgeInsets.all(8.0),
                         child: Column(
                           children: [
                             Row(
                               children: [
-                                Icon(Icons.image_outlined,
-                                    color: Colors.teal, size: 20),
+                                Icon(Icons.image_outlined, color: Colors.teal, size: 20),
                                 const SizedBox(width: 8),
-                                Expanded(
-                                    child: Text(_selectedFile!.name,
-                                        overflow: TextOverflow.ellipsis,
-                                        style: const TextStyle(fontSize: 13))),
+                                Expanded(child: Text(_selectedFile!.name, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 13))),
                                 TextButton(
-                                  style: TextButton.styleFrom(
-                                      padding: EdgeInsets.zero,
-                                      minimumSize: const Size(60, 30),
-                                      tapTargetSize:
-                                          MaterialTapTargetSize.shrinkWrap,
-                                      alignment: Alignment.centerRight),
-                                  onPressed: () {
-                                    if (mounted) {
-                                      setState(() => _isPreviewExpanded =
-                                          !_isPreviewExpanded);
-                                    }
-                                  },
-                                  child: Text(
-                                      _isPreviewExpanded
-                                          ? 'Ocultar'
-                                          : 'Mostrar',
-                                      style: const TextStyle(
-                                          color: Colors.teal, fontSize: 13)),
+                                  style: TextButton.styleFrom(padding: EdgeInsets.zero, minimumSize: const Size(60, 30), tapTargetSize: MaterialTapTargetSize.shrinkWrap),
+                                  onPressed: () => setState(() => _isPreviewExpanded = !_isPreviewExpanded),
+                                  child: Text(_isPreviewExpanded ? 'Ocultar' : 'Mostrar', style: const TextStyle(color: Colors.teal, fontSize: 13)),
                                 ),
                                 TextButton(
-                                  style: TextButton.styleFrom(
-                                      padding: EdgeInsets.zero,
-                                      minimumSize: const Size(60, 30),
-                                      tapTargetSize:
-                                          MaterialTapTargetSize.shrinkWrap,
-                                      alignment: Alignment.centerRight),
+                                  style: TextButton.styleFrom(padding: EdgeInsets.zero, minimumSize: const Size(60, 30), tapTargetSize: MaterialTapTargetSize.shrinkWrap),
                                   onPressed: _isLoading ? null : _removeImage,
-                                  child: const Text('Eliminar',
-                                      style: TextStyle(
-                                          color: Colors.red, fontSize: 13)),
+                                  child: Text('Eliminar', style: TextStyle(color: _isLoading ? Colors.grey : Colors.red, fontSize: 13)),
                                 ),
                               ],
                             ),
@@ -957,37 +909,21 @@ El usuario puede proporcionar:
                               curve: Curves.easeInOut,
                               child: _isPreviewExpanded
                                   ? ConstrainedBox(
-                                      constraints: BoxConstraints(
-                                          maxHeight: isWideScreen ? 250 : 150),
-                                      child: Padding(
-                                        padding:
-                                            const EdgeInsets.only(top: 8.0),
-                                        child: ClipRRect(
-                                          borderRadius:
-                                              BorderRadius.circular(8),
-                                          child: kIsWeb
-                                              ? Image.memory(
-                                                  _selectedFile!.bytes!,
-                                                  fit: BoxFit.contain,
-                                                  errorBuilder: (c, e, s) =>
-                                                      const Text(
-                                                          'Error al mostrar imagen web'),
-                                                )
-                                              : (_selectedFile!.path != null)
-                                                  ? Image.file(
-                                                      File(
-                                                          _selectedFile!.path!),
-                                                      fit: BoxFit.contain,
-                                                      errorBuilder: (c, e, s) =>
-                                                          const Text(
-                                                              'Error al mostrar imagen móvil'),
-                                                    )
-                                                  : const Center(
-                                                      child: Text(
-                                                          'Vista previa no disponible (móvil)')),
-                                        ),
-                                      ),
-                                    )
+                                constraints: BoxConstraints(maxHeight: isWideScreen ? 250 : 150),
+                                child: Padding(
+                                  padding: const EdgeInsets.only(top: 8.0),
+                                  child: ClipRRect(
+                                    borderRadius: BorderRadius.circular(8),
+                                    child: kIsWeb
+                                        ? (_selectedFile?.bytes != null
+                                        ? Image.memory(_selectedFile!.bytes!, fit: BoxFit.contain, errorBuilder: (c, e, s) => const Center(child: Text('Error al mostrar imagen (Web)')))
+                                        : const Center(child: Text('Vista previa no disponible (Web)')))
+                                        : (_selectedFile?.path != null
+                                        ? Image.file(File(_selectedFile!.path!), fit: BoxFit.contain, errorBuilder: (c, e, s) => const Center(child: Text('Error al mostrar imagen (Móvil)')))
+                                        : const Center(child: Text('Vista previa no disponible (Móvil)'))),
+                                  ),
+                                ),
+                              )
                                   : const SizedBox.shrink(),
                             ),
                           ],
@@ -996,78 +932,65 @@ El usuario puede proporcionar:
                     ),
                   ),
                 Container(
-                  padding: EdgeInsets.fromLTRB(isWideScreen ? 24.0 : 8.0, 8.0,
-                      isWideScreen ? 24.0 : 8.0, 16.0),
+                  padding: EdgeInsets.fromLTRB(isWideScreen ? 24.0 : 8.0, 8.0, isWideScreen ? 24.0 : 8.0, 16.0),
                   decoration: BoxDecoration(
                     color: Theme.of(context).cardColor,
-                    border: Border(
-                        top: BorderSide(
-                            color: Colors.grey.shade300, width: 0.5)),
+                    border: Border(top: BorderSide(color: Colors.grey.shade300, width: 0.5)),
                   ),
-                  child: Row(
-                    crossAxisAlignment: CrossAxisAlignment.end,
-                    children: [
-                      IconButton(
-                        padding: const EdgeInsets.only(bottom: 8, right: 4),
-                        icon: const Icon(Icons.add_photo_alternate_outlined,
-                            size: 28),
-                        color: Colors.teal,
-                        tooltip: 'Seleccionar Imagen',
-                        onPressed: _isLoading ? null : _pickImage,
-                      ),
-                      Expanded(
-                        child: TextField(
-                          controller: _controller,
-                          decoration: InputDecoration(
-                            hintText: 'Escribe tu pregunta aquí...',
-                            border: OutlineInputBorder(
-                              borderRadius: BorderRadius.circular(25.0),
-                              borderSide: BorderSide.none,
-                            ),
-                            focusedBorder: OutlineInputBorder(
-                              borderRadius: BorderRadius.circular(25.0),
-                              borderSide: BorderSide(
-                                  color: Colors.teal.shade200, width: 1.5),
-                            ),
-                            filled: true,
-                            fillColor: Colors.grey.shade100,
-                            contentPadding: const EdgeInsets.symmetric(
-                                horizontal: 16, vertical: 12),
-                            isDense: true,
+                  child: ValueListenableBuilder<String>(
+                    valueListenable: _textFieldValue,
+                    builder: (context, textValue, child) {
+                      bool canSendMessage = !_isLoading && (textValue.trim().isNotEmpty || _selectedFile != null);
+                      return Row(
+                        crossAxisAlignment: CrossAxisAlignment.end,
+                        children: [
+                          IconButton(
+                            padding: const EdgeInsets.only(bottom: 8, right: 4),
+                            icon: const Icon(Icons.add_photo_alternate_outlined, size: 28),
+                            color: _isLoading ? Colors.grey : Colors.teal,
+                            tooltip: 'Seleccionar Imagen',
+                            onPressed: _isLoading ? null : _pickImage,
                           ),
-                          minLines: 1,
-                          maxLines: 5,
-                          textInputAction: TextInputAction.send,
-                          onSubmitted: (value) {
-                            if (!_isLoading &&
-                                (_controller.text.trim().isNotEmpty ||
-                                    _selectedFile != null)) {
-                              _generateResponse(_controller.text.trim());
-                            }
-                          },
-                          keyboardType: TextInputType.multiline,
-                          enabled: !_isLoading,
-                          style: const TextStyle(fontSize: 16),
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      IconButton(
-                        padding: const EdgeInsets.only(bottom: 8, left: 4),
-                        icon: _isLoading
-                            ? const SizedBox(
-                                width: 24,
-                                height: 24,
-                                child:
-                                    CircularProgressIndicator(strokeWidth: 2),
-                              )
-                            : const Icon(Icons.send, size: 28),
-                        tooltip: 'Enviar Mensaje',
-                        color: canSendMessage ? Colors.teal : Colors.grey,
-                        onPressed: canSendMessage
-                            ? () => _generateResponse(_controller.text.trim())
-                            : null,
-                      ),
-                    ],
+                          Expanded(
+                            child: TextField(
+                              controller: _controller,
+                              decoration: InputDecoration(
+                                hintText: 'Escribe tu pregunta aquí...',
+                                border: OutlineInputBorder(borderRadius: BorderRadius.circular(25.0), borderSide: BorderSide.none),
+                                focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(25.0), borderSide: BorderSide(color: Colors.teal.shade200, width: 1.5)),
+                                filled: true,
+                                fillColor: Colors.grey.shade100,
+                                contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                                isDense: true,
+                              ),
+                              minLines: 1,
+                              maxLines: 5,
+                              textInputAction: TextInputAction.send,
+                              onSubmitted: (value) {
+                                if (canSendMessage) _generateResponse(value.trim());
+                              },
+                              onChanged: (value) {
+                                _textFieldValue.value = value;
+                                _scrollToBottom(jump: false); // Desplazar al final mientras el usuario escribe
+                              },
+                              keyboardType: TextInputType.multiline,
+                              enabled: !_isLoading,
+                              style: const TextStyle(fontSize: 16),
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          IconButton(
+                            padding: const EdgeInsets.only(bottom: 8, left: 4),
+                            icon: _isLoading
+                                ? const SizedBox(width: 24, height: 24, child: CircularProgressIndicator(strokeWidth: 2))
+                                : const Icon(Icons.send, size: 28),
+                            tooltip: 'Enviar Mensaje',
+                            color: canSendMessage ? Colors.teal : Colors.grey,
+                            onPressed: canSendMessage ? () => _generateResponse(_controller.text.trim()) : null,
+                          ),
+                        ],
+                      );
+                    },
                   ),
                 ),
               ],
