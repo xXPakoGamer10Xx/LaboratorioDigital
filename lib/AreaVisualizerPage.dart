@@ -1,7 +1,8 @@
 import 'package:flutter/material.dart';
+import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter_math_fork/flutter_math.dart';
-import 'dart:math' as math;
 import 'package:math_expressions/math_expressions.dart';
+import 'dart:math' as math;
 
 class AreaVisualizerPage extends StatefulWidget {
   const AreaVisualizerPage({super.key});
@@ -10,296 +11,209 @@ class AreaVisualizerPage extends StatefulWidget {
   State<AreaVisualizerPage> createState() => _AreaVisualizerPageState();
 }
 
-class _AreaVisualizerPageState extends State<AreaVisualizerPage> {
-  final TextEditingController _functionController = TextEditingController();
-  final TextEditingController _lowerLimitController = TextEditingController();
-  final TextEditingController _upperLimitController = TextEditingController();
-  String? _function;
-  double? _lowerLimit;
-  double? _upperLimit;
-  String? _evaluationError; // Para mostrar errores en UI si es necesario
+class _AreaVisualizerPageState extends State<AreaVisualizerPage> with WidgetsBindingObserver {
+  final TextEditingController _expressionController = TextEditingController();
+  final TextEditingController _minXController = TextEditingController(text: '-10');
+  final TextEditingController _maxXController = TextEditingController(text: '10');
+  List<FlSpot> _points = [];
+  double _area = 0.0;
+  String _errorMessage = '';
+  String _latexExpression = '';
+
+  // Lista de funciones soportadas para los botones
+  final List<Map<String, String>> _supportedFunctions = [
+    {'name': 'sin', 'latex': '\\sin(x)'}, {'name': 'cos', 'latex': '\\cos(x)'},
+    {'name': 'tan', 'latex': '\\tan(x)'}, {'name': 'csc', 'latex': '\\csc(x)'},
+    {'name': 'sec', 'latex': '\\sec(x)'}, {'name': 'cot', 'latex': '\\cot(x)'},
+    {'name': 'ln', 'latex': '\\ln(x)'}, {'name': 'log', 'latex': '\\log_{10}(x)'},
+    {'name': 'sqrt', 'latex': '\\sqrt{x}'}, {'name': 'exp', 'latex': 'e^{x}'},
+    {'name': 'abs', 'latex': '|x|'}, {'name': 'asin', 'latex': '\\arcsin(x)'},
+    {'name': 'acos', 'latex': '\\arccos(x)'},{'name': 'atan', 'latex': '\\arctan(x)'},
+    {'name': 'x^2', 'latex': 'x^{2}'}, {'name': 'x^3', 'latex': 'x^{3}'},
+    {'name': 'x^(1/n)', 'latex': '\\sqrt[n]{x}'}, {'name': 'pi', 'latex': '\\pi'},
+    {'name': 'e', 'latex': 'e'},
+  ];
+
+  final List<String> _functionsNeedingParentheses = [
+    'sin', 'cos', 'tan', 'csc', 'sec', 'cot', 'ln', 'log', 'sqrt', 'exp', 'abs', 'asin', 'acos', 'atan'
+  ];
 
   @override
   void initState() {
     super.initState();
-    // Listener para limpiar error si cambia la función o límites
-    _functionController.addListener(_clearError);
-    _lowerLimitController.addListener(_clearError);
-    _upperLimitController.addListener(_clearError);
+    WidgetsBinding.instance.addObserver(this);
   }
 
-  void _clearError() {
-    if (_evaluationError != null) {
-      setState(() {
-        _evaluationError = null;
-      });
-    }
-  }
-
-  // --- Helper para añadir multiplicación explícita ---
-  String _addExplicitMultiplication(String func) {
-    // Quitar espacios primero para simplificar regex
-    String result = func.replaceAll(' ', '');
-
-    // Reemplazos específicos ANTES de añadir '*':
-    result = result
-        .replaceAll('pi', '(${math.pi})') // Reemplazar pi por su valor numérico
-        .replaceAll('e', '(${math.e})');  // Reemplazar e por su valor numérico
-
-    // Lista de funciones conocidas para evitar agregar * después de ellas
-    final knownFunctions = ['sin', 'cos', 'tan', 'ln', 'log', 'sqrt', 'abs', 'sec', 'csc', 'cot'];
-
-    // Iterar para aplicar reglas hasta que no haya cambios
-    String previousResult;
-    int iterations = 0; // Limitar iteraciones por seguridad
-    do {
-      previousResult = result;
-
-      // 1. Dígito seguido de Letra (ej: 3x -> 3*x)
-      result = result.replaceAllMapped(
-        RegExp(r'(\d)([a-zA-Z])'),
-            (match) {
-          String nextChar = match.group(2)!;
-          if (knownFunctions.contains(nextChar)) {
-            return match.group(0)!; // No agregar * si es una función conocida
-          }
-          return '${match.group(1)}*${match.group(2)}';
-        },
-      );
-
-      // 2. Letra seguida de Número (ej: x3 -> x*3)
-      result = result.replaceAllMapped(
-        RegExp(r'([a-zA-Z])(\d)'),
-            (match) => '${match.group(1)}*${match.group(2)}',
-      );
-
-      // 3. Paréntesis cerrado seguido de Letra, Número o Paréntesis abierto (ej: )( -> )*(, )x -> )*x)
-      result = result.replaceAllMapped(
-        RegExp(r'(\))([a-zA-Z0-9\(])'),
-            (match) => '${match.group(1)}*${match.group(2)}',
-      );
-
-      // 4. Dígito seguido de Paréntesis Abierto (ej: 3( -> 3*()
-      result = result.replaceAllMapped(
-        RegExp(r'(\d)(\()'),
-            (match) => '${match.group(1)}*${match.group(2)}',
-      );
-
-      iterations++;
-    } while (previousResult != result && iterations < 5); // Evitar bucles infinitos
-
-    // --- Otros reemplazos (DESPUÉS de añadir '*') ---
-    result = result
-        .replaceAll('cot(', '1/tan(') // Cuidado con tan(0), etc.
-        .replaceAll('sec(', '1/cos(')
-        .replaceAll('csc(', '1/sin(')
-        .replaceAll('ln(', 'log(') // ln(x) → log(x) para math_expressions
-        .replaceAll('infinity', '1e10'); // Workaround
-
-    // Transformar root(x, n) en x^(1/n)
-    if (result.contains('root')) {
-      RegExp rootRegExp = RegExp(r'root\(([^,]+),\s*([^)]+)\)');
-      result = result.replaceAllMapped(rootRegExp, (match) {
-        String base = match.group(1)!;
-        String index = match.group(2)!;
-        return '($base)^(1/($index))';
-      });
-    }
-
-    return result;
-  }
-
-  // --- Evaluación de la función ---
-  double _evaluateFunction(String function, double x) {
-    String modifiedFunction = "";
-    // Limpiar error al inicio de cada evaluación
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted && _evaluationError != null) {
-        setState(() => _evaluationError = null);
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    super.didChangeAppLifecycleState(state);
+    if (state == AppLifecycleState.resumed) {
+      if (mounted) {
+        setState(() { print("AreaVisualizer Page - App resumed, forcing UI redraw."); });
       }
-    });
+    }
+  }
 
+  // Función de evaluación principal
+  double _evaluateExpression(String expression, double x) {
+    String processedExpression = expression;
+    String finalExpression = '';
     try {
-      modifiedFunction = _addExplicitMultiplication(function);
-      print('Función original: "$function", Modificada: "$modifiedFunction"'); // Depuración
-
       Parser p = Parser();
-      Expression exp = p.parse(modifiedFunction);
-      ContextModel cm = ContextModel();
-      cm.bindVariable(Variable('x'), Number(x));
+      processedExpression = processedExpression.toLowerCase();
 
+      // Reemplazar constantes
+      processedExpression = processedExpression
+          .replaceAll('pi', '(${math.pi})')
+          .replaceAllMapped(RegExp(r'(?<![a-z])e(?![a-z])'), (match) => '(${math.e})');
+
+      // Reemplazar funciones para math_expressions
+      processedExpression = processedExpression
+          .replaceAllMapped(RegExp(r'\blog\s*\(([^)]*)\)'), (m) => '(ln(${m[1]})/ln(10))') // log() -> ln()/ln(10)
+          .replaceAllMapped(RegExp(r'\bln\s*\(([^)]*)\)'), (m) => 'ln(${m[1]})')       // ln() -> ln()
+          .replaceAllMapped(RegExp(r'\basin\s*\(([^)]*)\)'), (m) => 'arcsin(${m[1]})') // asin() -> arcsin()
+          .replaceAllMapped(RegExp(r'\bacos\s*\(([^)]*)\)'), (m) => 'arccos(${m[1]})') // acos() -> arccos()
+          .replaceAllMapped(RegExp(r'\batan\s*\(([^)]*)\)'), (m) => 'arctan(${m[1]})') // atan() -> arctan()
+          .replaceAllMapped(RegExp(r'\bcsc\s*\(([^)]*)\)'), (m) => '(1/sin(${m[1]}))')  // csc() -> 1/sin()
+          .replaceAllMapped(RegExp(r'\bsec\s*\(([^)]*)\)'), (m) => '(1/cos(${m[1]}))')  // sec() -> 1/cos()
+          .replaceAllMapped(RegExp(r'\bcot\s*\(([^)]*)\)'), (m) => '(1/tan(${m[1]}))')  // cot() -> 1/tan()
+          .replaceAllMapped(RegExp(r'\bsqrt\s*\(([^)]*)\)'), (m) => 'sqrt(${m[1]})')    // sqrt() -> sqrt()
+          .replaceAllMapped(RegExp(r'\bexp\s*\(([^)]*)\)'), (m) => 'exp(${m[1]})')      // exp() -> exp()
+          .replaceAllMapped(RegExp(r'\babs\s*\(([^)]*)\)'), (m) => 'abs(${m[1]})');     // abs() -> abs()
+
+      // Reemplazar 'x' variable
+      finalExpression = processedExpression.replaceAllMapped(
+          RegExp(r'(?<![a-z])x(?![a-z])'),
+              (match) => '(${x.toString()})'
+      );
+
+      Expression exp = p.parse(finalExpression);
+      ContextModel cm = ContextModel();
       double result = exp.evaluate(EvaluationType.REAL, cm);
 
       if (result.isNaN || result.isInfinite) {
-        print('Resultado NaN o infinito para x=$x');
         return double.nan;
       }
       return result;
+
     } catch (e) {
-      final errorMsg = 'Error en f(x): $e\nOriginal: "$function"\nModificada: "$modifiedFunction"';
-      print(errorMsg);
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted && _evaluationError == null) {
-          setState(() => _evaluationError = 'Error en la función. Revisa la sintaxis.');
-        }
-      });
+      print("Error evaluating expression '$expression' [Final attempt: '$finalExpression'] at x=$x: $e");
+      if (mounted && (_errorMessage.isEmpty || !_errorMessage.contains('Error en expresión'))) {
+        setState(() { _errorMessage = 'Error en expresión. Verifique sintaxis y uso de *.'; });
+      }
       return double.nan;
     }
   }
 
-  // Método para mostrar el diálogo de símbolos matemáticos
-  void _showMathSymbolsDialog() {
-    showDialog(
-      context: context,
-      builder: (context) {
-        return AlertDialog(
-          title: const Text('Símbolos Matemáticos'),
-          content: SingleChildScrollView(
-            child: Wrap(
-              spacing: 10,
-              runSpacing: 10,
-              children: [
-                _buildSymbolButton('x²', '^2'),
-                _buildSymbolButton('xⁿ', '^'),
-                _buildSymbolButton('log', 'log'),
-                _buildSymbolButton('ln', 'ln'),
-                _buildSymbolButton('√', 'sqrt'),
-                _buildSymbolButton('√ⁿ', 'root'),
-                _buildSymbolButton('|x|', 'abs'),
-                _buildSymbolButton('sin', 'sin'),
-                _buildSymbolButton('cos', 'cos'),
-                _buildSymbolButton('tan', 'tan'),
-                _buildSymbolButton('cot', 'cot'),
-                _buildSymbolButton('sec', 'sec'),
-                _buildSymbolButton('csc', 'csc'),
-                _buildSymbolButton('π', 'pi'),
-                _buildSymbolButton('∞', 'infinity'),
-                _buildSymbolButton('e', 'e'),
-                _buildSymbolButton('(', '('),
-                _buildSymbolButton(')', ')'),
-              ],
-            ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('Cerrar'),
-            ),
-          ],
-        );
-      },
-    );
-  }
+  // Función para convertir a LaTeX (solo visualización)
+  String _toLatex(String expression) {
+    String latex = expression
+        .replaceAll('*', '\\cdot ')
+        .replaceAllMapped(RegExp(r'x\^([\d\.\-]+)'), (m) => 'x^{${m[1]}}')
+        .replaceAllMapped(RegExp(r'x\^\(([^)]+)\)'), (m) => 'x^{${m[1]}}')
+        .replaceAllMapped(RegExp(r'x\^\(1/(\d+)\)'), (m) => '\\sqrt[${m[1]}]{x}')
+        .replaceAllMapped(RegExp(r'sqrt\(([^)]*)\)'), (m) => '\\sqrt{${m[1]}}')
+        .replaceAllMapped(RegExp(r'abs\(([^)]*)\)'), (m) => '|${m[1]}|')
+        .replaceAllMapped(RegExp(r'log\(([^)]*)\)'), (m) => '\\log_{10}(${m[1]})')
+        .replaceAllMapped(RegExp(r'ln\(([^)]*)\)'), (m) => '\\ln(${m[1]})')
+        .replaceAllMapped(RegExp(r'sin\(([^)]*)\)'), (m) => '\\sin(${m[1]})')
+        .replaceAllMapped(RegExp(r'cos\(([^)]*)\)'), (m) => '\\cos(${m[1]})')
+        .replaceAllMapped(RegExp(r'tan\(([^)]*)\)'), (m) => '\\tan(${m[1]})')
+        .replaceAllMapped(RegExp(r'csc\(([^)]*)\)'), (m) => '\\csc(${m[1]})')
+        .replaceAllMapped(RegExp(r'sec\(([^)]*)\)'), (m) => '\\sec(${m[1]})')
+        .replaceAllMapped(RegExp(r'cot\(([^)]*)\)'), (m) => '\\cot(${m[1]})')
+        .replaceAllMapped(RegExp(r'asin\(([^)]*)\)'), (m) => '\\arcsin(${m[1]})')
+        .replaceAllMapped(RegExp(r'acos\(([^)]*)\)'), (m) => '\\arccos(${m[1]})')
+        .replaceAllMapped(RegExp(r'atan\(([^)]*)\)'), (m) => '\\arctan(${m[1]})')
+        .replaceAllMapped(RegExp(r'exp\(([^)]*)\)'), (m) => 'e^{${m[1]}}')
+        .replaceAll('pi', '\\pi')
+        .replaceAllMapped(RegExp(r'(?<![a-zA-Z])e(?![a-zA-Z])'), (match) => '{e}');
 
-  // Método para construir un botón de símbolo
-  Widget _buildSymbolButton(String display, String insert) {
-    return ElevatedButton(
-      onPressed: () {
-        _insertSymbol(insert);
-        Navigator.pop(context);
-      },
-      child: Text(display),
-      style: ElevatedButton.styleFrom(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-        backgroundColor: Colors.teal,
-        foregroundColor: Colors.white,
-      ),
-    );
-  }
-
-  // Método para insertar el símbolo en el TextField
-  void _insertSymbol(String symbol) {
-    final currentText = _functionController.text;
-    final selection = _functionController.selection;
-    final cursorPos = selection.baseOffset;
-    String textToInsert = symbol;
-    int cursorOffset = symbol.length;
-
-    bool placeCursorInside = false;
-
-    switch (symbol) {
-      case '^2':
-        textToInsert = '^2';
-        cursorOffset = textToInsert.length;
-        break;
-      case '^':
-        textToInsert = '^';
-        cursorOffset = textToInsert.length;
-        break;
-      case 'sqrt':
-      case 'abs':
-      case 'sin':
-      case 'cos':
-      case 'tan':
-      case 'cot':
-      case 'sec':
-      case 'csc':
-      case 'log':
-      case 'ln':
-        textToInsert = '$symbol(x)';
-        placeCursorInside = true;
-        break;
-      case 'root':
-        textToInsert = 'root(x,2)';
-        cursorOffset = textToInsert.indexOf('(') + 1;
-        break;
-      case 'pi':
-      case 'e':
-      case 'infinity':
-        break;
-      case '(':
-      case ')':
-        break;
-      default:
-        textToInsert = symbol;
-        cursorOffset = symbol.length;
-    }
-
-    if (placeCursorInside && textToInsert.endsWith(')')) {
-      cursorOffset = textToInsert.length - 1;
-    }
-
-    final newText = currentText.replaceRange(selection.start, selection.end, textToInsert);
-
-    _functionController.text = newText;
-    _functionController.selection = TextSelection.collapsed(
-      offset: selection.start + cursorOffset,
-    );
-
-    setState(() {
-      _function = newText.isEmpty ? null : newText;
-      _clearError();
+    latex = latex.replaceAllMapped(RegExp(r'\((.+?)\)/\((.+?)\)'), (m) => '\\frac{${m[1]}}{${m[2]}}');
+    latex = latex.replaceAllMapped(RegExp(r'([^ ]+)/([^ ]+)'), (m) {
+      if (m[0]!.contains(r'\frac')) return m[0]!;
+      return '\\frac{${m[1]}}{${m[2]}}';
     });
+
+    return latex;
   }
 
-  @override
-  void dispose() {
-    _functionController.removeListener(_clearError);
-    _lowerLimitController.removeListener(_clearError);
-    _upperLimitController.removeListener(_clearError);
-    _functionController.dispose();
-    _lowerLimitController.dispose();
-    _upperLimitController.dispose();
-    super.dispose();
+  // Generar los puntos para la gráfica y calcular el área
+  void _generatePlot() {
+    setState(() {
+      _points.clear(); _errorMessage = ''; _area = 0.0;
+      _latexExpression = _expressionController.text.isNotEmpty ? _toLatex(_expressionController.text) : '';
+    });
+
+    final expression = _expressionController.text.trim();
+    if (expression.isEmpty) {
+      setState(() { _errorMessage = 'Por favor, ingrese una función'; }); return;
+    }
+
+    double? minX, maxX;
+    try {
+      minX = double.tryParse(_minXController.text); maxX = double.tryParse(_maxXController.text);
+      if (minX == null || maxX == null) { setState(() { _errorMessage = 'Límites X deben ser válidos'; }); return; }
+      if (minX >= maxX) { setState(() { _errorMessage = 'Mín X < Máx X'; }); return; }
+
+      const int steps = 200; double step = (maxX - minX) / steps;
+      List<FlSpot> tempPoints = []; List<double> xValA = []; List<double> yValA = [];
+      bool hasValid = false; bool errorOccurred = false;
+
+      _errorMessage = ''; // Reiniciar error
+
+      for (int i = 0; i <= steps; i++) {
+        double x = minX + i * step; x = double.parse(x.toStringAsFixed(8));
+        double y = _evaluateExpression(expression, x);
+
+        if (_errorMessage.isNotEmpty && _errorMessage.contains('Error en expresión')) {
+          errorOccurred = true;
+          // break; // Opcional: detener si ocurre un error
+        }
+
+        if (!y.isNaN && !y.isInfinite) {
+          tempPoints.add(FlSpot(x, y)); xValA.add(x); yValA.add(y); hasValid = true;
+        } else { print("Skip invalid point x=$x (y=$y)"); }
+      }
+
+      double calcArea = 0.0;
+      if (xValA.length > 1) {
+        for (int i = 1; i < xValA.length; i++) {
+          double x0 = xValA[i - 1], x1 = xValA[i], y0 = yValA[i - 1], y1 = yValA[i];
+          if (y0.isFinite && y1.isFinite) { calcArea += (y0 + y1) * (x1 - x0) / 2.0; }
+        }
+      }
+
+      if(hasValid){
+        setState(() { _points = tempPoints; _area = calcArea; });
+      } else if (!errorOccurred) {
+        setState(() { _errorMessage = 'No se generaron puntos válidos en el rango.'; });
+      }
+
+    } catch (e) {
+      print("Error plot: $e");
+      setState(() { _errorMessage = 'Error al graficar: ${e.toString()}'; _points.clear(); _area = 0.0; });
+    }
+  }
+
+  Future<String?> _promptForRootIndex(BuildContext context) async {
+    final TextEditingController indexController = TextEditingController();
+    return showDialog<String>( context: context, builder: (context) => AlertDialog( title: const Text('Índice raíz'), content: TextField(controller: indexController, decoration: const InputDecoration(labelText: 'Ingrese n (ej. 2)', hintText: 'Entero > 1'), keyboardType: TextInputType.number, autofocus: true), actions: [ TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancelar')), TextButton( onPressed: () { final index = int.tryParse(indexController.text); if (index != null && index > 1) { Navigator.pop(context, index.toString()); } else { ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Ingrese entero > 1'), duration: Duration(seconds: 2))); } }, child: const Text('Aceptar'), ), ], ), );
+  }
+
+  void _showFunctionButtons() {
+    showModalBottomSheet( context: context, isScrollControlled: true, builder: (context) => LayoutBuilder( builder: (context, constraints) { final isWide = constraints.maxWidth >= 600; final crossAxisCount = isWide ? 5 : 3; final rowCount = (_supportedFunctions.length / crossAxisCount).ceil(); final height = (rowCount * 65.0) + 80.0; return Container( height: height.clamp(200, 400), padding: const EdgeInsets.all(16.0), child: Column( crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [ const Text('Insertar función', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)), const SizedBox(height: 10), Expanded( child: GridView.builder( gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(crossAxisCount: crossAxisCount, crossAxisSpacing: 10, mainAxisSpacing: 10, childAspectRatio: 2.8), itemCount: _supportedFunctions.length, itemBuilder: (context, index) { final func = _supportedFunctions[index]; return ElevatedButton( style: ElevatedButton.styleFrom(padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4), textStyle: const TextStyle(fontSize: 14)), onPressed: () async { String baseName = func['name']!; String textToIns = baseName; bool placeCursorIn = false; if (baseName == 'x^(1/n)') { final nIdx = await _promptForRootIndex(context); if (nIdx != null) { textToIns = 'x^(1/$nIdx)'; } else { return; } } else if (_functionsNeedingParentheses.contains(baseName)) { textToIns = '$baseName()'; placeCursorIn = true; } else if (baseName == 'pi' || baseName == 'e') { textToIns = baseName; } final ctrl = _expressionController; final currentVal = ctrl.value; final sel = currentVal.selection; final newTxt = currentVal.text.replaceRange(sel.start, sel.end, textToIns); int newOff; if (placeCursorIn) { newOff = sel.start + textToIns.length - 1; } else { newOff = sel.start + textToIns.length; } ctrl.value = TextEditingValue(text: newTxt, selection: TextSelection.collapsed(offset: newOff)); setState(() { _latexExpression = _toLatex(ctrl.text); }); Navigator.pop(context); }, child: Math.tex(func['latex']!, textStyle: const TextStyle(fontSize: 16)), ); }, ), ), ], ), ); }, ), );
   }
 
   @override
   Widget build(BuildContext context) {
-    bool canVisualize = _function != null &&
-        _function!.isNotEmpty &&
-        _lowerLimit != null &&
-        _upperLimit != null &&
-        _evaluationError == null;
-
     return Scaffold(
       appBar: AppBar(
         title: const Text('Visualizador de Áreas'),
-        centerTitle: true,
-        elevation: 4,
-        leading: IconButton(
-          icon: const Icon(Icons.arrow_back),
-          onPressed: () => Navigator.pop(context),
-        ),
+        actions: [
+          IconButton(icon: const Icon(Icons.functions), tooltip: 'Insertar función', onPressed: _showFunctionButtons),
+          IconButton(icon: const Icon(Icons.refresh), tooltip: 'Recalcular', onPressed: _generatePlot),
+        ],
       ),
       body: SingleChildScrollView(
         child: Padding(
@@ -307,285 +221,136 @@ class _AreaVisualizerPageState extends State<AreaVisualizerPage> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              const Text(
-                'Ingresa la función y los límites de integración',
-                style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-                textAlign: TextAlign.center,
-              ),
-              const SizedBox(height: 16),
-              Row(
-                children: [
-                  Expanded(
-                    child: TextField(
-                      controller: _functionController,
-                      decoration: InputDecoration(
-                        labelText: 'Función f(x)',
-                        hintText: 'Ej: 3*x^2+5*x-9, sin(x)',
-                        border: const OutlineInputBorder(),
-                        errorText: _evaluationError,
-                        errorMaxLines: 2,
-                      ),
-                      onChanged: (value) {
-                        setState(() {
-                          _function = value.isEmpty ? null : value;
-                        });
-                      },
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  IconButton(
-                    icon: const Icon(Icons.functions),
-                    tooltip: 'Símbolos matemáticos',
-                    onPressed: _showMathSymbolsDialog,
-                  ),
-                ],
-              ),
-              const SizedBox(height: 16),
-              Row(
-                children: [
-                  Expanded(
-                    child: TextField(
-                      controller: _lowerLimitController,
-                      decoration: const InputDecoration(
-                        labelText: 'Límite inferior',
-                        border: OutlineInputBorder(),
-                      ),
-                      keyboardType: const TextInputType.numberWithOptions(signed: true, decimal: true),
-                      onChanged: (value) {
-                        setState(() {
-                          _lowerLimit = double.tryParse(value);
-                        });
-                      },
-                    ),
-                  ),
-                  const SizedBox(width: 16),
-                  Expanded(
-                    child: TextField(
-                      controller: _upperLimitController,
-                      decoration: const InputDecoration(
-                        labelText: 'Límite superior',
-                        border: OutlineInputBorder(),
-                      ),
-                      keyboardType: const TextInputType.numberWithOptions(signed: true, decimal: true),
-                      onChanged: (value) {
-                        setState(() {
-                          _upperLimit = double.tryParse(value);
-                        });
-                      },
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 16),
-              if (canVisualize)
-                Card(
-                  elevation: 3,
-                  child: Padding(
-                    padding: const EdgeInsets.all(8.0),
-                    child: Center(
-                      child: Math.tex(
-                        r'\int_{' '{${_lowerLimit!.toStringAsFixed(2)}}' r'}^{' '{${_upperLimit!.toStringAsFixed(2)}}' r'} \left(' +
-                            _function! +
-                            r'\right) \,dx',
-                        textStyle: const TextStyle(fontSize: 20),
-                        mathStyle: MathStyle.display,
-                      ),
-                    ),
-                  ),
+              TextField(
+                controller: _expressionController,
+                decoration: const InputDecoration(
+                    labelText: 'Función f(x)',
+                    hintText: 'Ej: 2*x^3 + sin(pi*x) (use * para multiplicar)', // Recordatorio de '*'
+                    border: OutlineInputBorder()
                 ),
-              const SizedBox(height: 16),
-              SizedBox(
-                height: 300,
-                child: canVisualize
-                    ? RepaintBoundary(
-                  child: CustomPaint(
-                    painter: FunctionGraphPainter(
-                      function: _function!,
-                      lowerLimit: _lowerLimit!,
-                      upperLimit: _upperLimit!,
-                      evaluateFunction: _evaluateFunction,
-                    ),
-                    child: Container(
-                      decoration: BoxDecoration(
-                        border: Border.all(color: Colors.grey.shade400),
-                      ),
-                    ),
+                style: const TextStyle(fontSize: 16),
+                onChanged: (value) { setState(() { _latexExpression = _toLatex(value); }); },
+                onSubmitted: (_) => _generatePlot(),
+              ),
+              const SizedBox(height: 10),
+              if (_latexExpression.isNotEmpty) Container( padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 8), decoration: BoxDecoration(color: Colors.grey[200], borderRadius: BorderRadius.circular(8)), child: Center(child: Math.tex('f(x) = $_latexExpression', mathStyle: MathStyle.display, textStyle: const TextStyle(fontSize: 20), onErrorFallback: (e) => Text('Error LaTeX: ${e.message}'))), ),
+              const SizedBox(height: 10),
+              Row( children: [ Expanded(child: TextField(controller: _minXController, decoration: const InputDecoration(labelText: 'Mínimo X', border: OutlineInputBorder()), keyboardType: const TextInputType.numberWithOptions(signed: true, decimal: true), onSubmitted: (_) => _generatePlot())), const SizedBox(width: 10), Expanded(child: TextField(controller: _maxXController, decoration: const InputDecoration(labelText: 'Máximo X', border: OutlineInputBorder()), keyboardType: const TextInputType.numberWithOptions(signed: true, decimal: true), onSubmitted: (_) => _generatePlot())), ], ),
+              const SizedBox(height: 15),
+              ElevatedButton.icon(icon: const Icon(Icons.analytics_outlined), label: const Text('Graficar y Calcular Área'), onPressed: _generatePlot, style: ElevatedButton.styleFrom(padding: const EdgeInsets.symmetric(vertical: 12), textStyle: const TextStyle(fontSize: 16))),
+              // Mostrar mensaje de error si existe
+              AnimatedSwitcher( // Para animar la aparición/desaparición del error
+                duration: const Duration(milliseconds: 300),
+                child: _errorMessage.isNotEmpty
+                    ? Padding(
+                  key: ValueKey(_errorMessage), // Key para que AnimatedSwitcher detecte el cambio
+                  padding: const EdgeInsets.only(top: 15.0),
+                  child: Text(
+                    _errorMessage,
+                    style: const TextStyle(color: Colors.red, fontSize: 14),
+                    textAlign: TextAlign.center,
                   ),
                 )
-                    : Container(
-                  decoration: BoxDecoration(
-                    color: Colors.grey[200],
-                    border: Border.all(color: Colors.grey.shade400),
-                    borderRadius: BorderRadius.circular(4),
-                  ),
-                  child: Center(
-                    child: Text(
-                      _evaluationError ?? 'Ingresa función y límites válidos',
-                      style: TextStyle(color: _evaluationError != null ? Colors.red : Colors.grey[600]),
-                      textAlign: TextAlign.center,
+                    : const SizedBox.shrink(key: ValueKey('noError')), // Ocupa espacio cero si no hay error
+              ),
+              const SizedBox(height: 20),
+              // Gráfica
+              Container(
+                height: 350, padding: const EdgeInsets.only(top: 10, right: 10), decoration: BoxDecoration(border: Border.all(color: Colors.grey.shade400), borderRadius: BorderRadius.circular(8)),
+                child: LineChart(
+                  LineChartData(
+                    // *** Parámetros de animación ELIMINADOS por incompatibilidad ***
+                    // swapAnimationDuration: const Duration(milliseconds: 250),
+                    // swapAnimationCurve: Curves.linear,
+
+                    // ... (resto de la configuración de LineChartData) ...
+                    gridData: FlGridData(show: true, drawVerticalLine: true, horizontalInterval: _calculateInterval(_points.map((p) => p.y).where((y) => y.isFinite).toList()), verticalInterval: _calculateInterval(_points.map((p) => p.x).where((x) => x.isFinite).toList()), getDrawingHorizontalLine: (v) => FlLine(color: Colors.grey.shade300, strokeWidth: 0.5), getDrawingVerticalLine: (v) => FlLine(color: Colors.grey.shade300, strokeWidth: 0.5)),
+                    titlesData: FlTitlesData(bottomTitles: AxisTitles(sideTitles: SideTitles(showTitles: true, reservedSize: 30, interval: _calculateInterval(_points.map((p) => p.x).where((x) => x.isFinite).toList()), getTitlesWidget: _bottomTitleWidgets)), leftTitles: AxisTitles(sideTitles: SideTitles(showTitles: true, reservedSize: 45, interval: _calculateInterval(_points.map((p) => p.y).where((y) => y.isFinite).toList()), getTitlesWidget: _leftTitleWidgets)), topTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)), rightTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false))),
+                    borderData: FlBorderData(show: true, border: Border.all(color: Colors.grey.shade400, width: 1)),
+                    lineBarsData: [ LineChartBarData(spots: _points, isCurved: true, gradient: const LinearGradient(colors: [Colors.blueAccent, Colors.lightBlueAccent]), barWidth: 3, isStrokeCapRound: true, dotData: const FlDotData(show: false), belowBarData: BarAreaData(show: true, gradient: LinearGradient(colors: [Colors.blueAccent.withOpacity(0.3), Colors.lightBlueAccent.withOpacity(0.0)], begin: Alignment.topCenter, end: Alignment.bottomCenter))) ],
+                    lineTouchData: LineTouchData(
+                        touchTooltipData: LineTouchTooltipData(
+                            getTooltipItems: (touchedSpots) => touchedSpots.map((spot) => LineTooltipItem('(${spot.x.toStringAsFixed(2)}, ${spot.y.toStringAsFixed(2)})', const TextStyle(color: Colors.white, fontWeight: FontWeight.bold))).toList()
+                        ),
+                        handleBuiltInTouches: true
                     ),
                   ),
                 ),
               ),
+              const SizedBox(height: 15),
+              // Área calculada (mostrar solo si no hay error y hay puntos)
+              if (_points.isNotEmpty && _errorMessage.isEmpty)
+                Center(child: Text('Área ≈ ${_area.abs().toStringAsFixed(4)}\n(Integral ≈ ${_area.toStringAsFixed(4)})', style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold), textAlign: TextAlign.center)),
             ],
           ),
         ),
       ),
     );
   }
-}
 
-class FunctionGraphPainter extends CustomPainter {
-  final String function;
-  final double lowerLimit;
-  final double upperLimit;
-  final double Function(String, double) evaluateFunction;
-
-  FunctionGraphPainter({
-    required this.function,
-    required this.lowerLimit,
-    required this.upperLimit,
-    required this.evaluateFunction,
-  });
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final gridPaint = Paint()
-      ..color = Colors.grey[300]!
-      ..strokeWidth = 0.5;
-    final axisPaint = Paint()
-      ..color = Colors.black
-      ..strokeWidth = 1;
-    final functionPaint = Paint()
-      ..color = Colors.green
-      ..strokeWidth = 2
-      ..style = PaintingStyle.stroke
-      ..strokeCap = StrokeCap.round;
-    final areaPaint = Paint()
-      ..color = Colors.green.withOpacity(0.3)
-      ..style = PaintingStyle.fill;
-    const textStyle = TextStyle(color: Colors.black, fontSize: 10);
-
-    double xPlotMin = math.min(lowerLimit, -math.pi) - 1;
-    double xPlotMax = math.max(upperLimit, math.pi) + 1;
-    if (xPlotMax <= xPlotMin) xPlotMax = xPlotMin + 2;
-
-    double yPlotMin = -10.0;
-    double yPlotMax = 20.0;
-
-    if (yPlotMax <= yPlotMin) {
-      yPlotMin = -5;
-      yPlotMax = 5;
+  Widget _bottomTitleWidgets(double value, TitleMeta meta) {
+    const style = TextStyle(color: Colors.black54, fontWeight: FontWeight.bold, fontSize: 12);
+    String text; double interval = meta.appliedInterval;
+    // Evitar precisión innecesaria si el intervalo es >= 1
+    if (interval >= 1.0) {
+      text = value.toInt().toString();
+    } else {
+      text = value.toStringAsFixed(1); // Mostrar 1 decimal para intervalos < 1
     }
-
-    double scaleX = size.width / (xPlotMax - xPlotMin);
-    double scaleY = (yPlotMax == yPlotMin) ? 1 : size.height / (yPlotMax - yPlotMin);
-    double originX = -xPlotMin * scaleX;
-    double originY = size.height - (-yPlotMin * scaleY);
-
-    canvas.clipRect(Rect.fromLTWH(0, 0, size.width, size.height));
-
-    for (double x = xPlotMin; x <= xPlotMax; x += 1) {
-      double canvasX = (x - xPlotMin) * scaleX;
-      canvas.drawLine(Offset(canvasX, 0), Offset(canvasX, size.height), gridPaint);
-    }
-    for (double y = yPlotMin; y <= yPlotMax; y += 1) {
-      double canvasY = size.height - (y - yPlotMin) * scaleY;
-      canvas.drawLine(Offset(0, canvasY), Offset(size.width, canvasY), gridPaint);
-    }
-
-    canvas.drawLine(Offset(0, originY), Offset(size.width, originY), axisPaint);
-    canvas.drawLine(Offset(originX, 0), Offset(originX, size.height), axisPaint);
-
-    for (int x = xPlotMin.toInt(); x <= xPlotMax.toInt(); x += 2) {
-      if (x != 0) {
-        double canvasX = (x - xPlotMin) * scaleX;
-        _drawText(canvas, x.toString(), Offset(canvasX - 5, originY + 5), textStyle);
-      }
-    }
-    for (double y = yPlotMin; y <= yPlotMax; y += 1) {
-      if (y != 0) {
-        double canvasY = size.height - (y - yPlotMin) * scaleY;
-        _drawText(canvas, y.toStringAsFixed(1), Offset(originX + 5, canvasY - 5), textStyle);
-      }
-    }
-
-    Path functionPath = Path();
-    List<Offset> areaPoints = [];
-    bool firstValidPointInPath = true;
-    bool firstPointInArea = true;
-
-    double startAreaCanvasX = (lowerLimit - xPlotMin) * scaleX;
-    if (startAreaCanvasX >= 0 && startAreaCanvasX <= size.width) {
-      areaPoints.add(Offset(startAreaCanvasX, originY));
-    }
-
-    for (int i = 0; i <= size.width.toInt(); i++) {
-      double x = xPlotMin + i / scaleX;
-      double y = evaluateFunction(function, x);
-
-      if (y.isNaN || y.isInfinite) {
-        firstValidPointInPath = true;
-        continue;
-      }
-
-      double canvasX = (x - xPlotMin) * scaleX;
-      double canvasY = (size.height - (y - yPlotMin) * scaleY).clamp(0.0, size.height);
-
-      if (firstValidPointInPath) {
-        functionPath.moveTo(canvasX, canvasY);
-        firstValidPointInPath = false;
-      } else {
-        functionPath.lineTo(canvasX, canvasY);
-      }
-
-      if (x >= lowerLimit && x <= upperLimit && canvasX >= 0 && canvasX <= size.width) {
-        if (firstPointInArea && areaPoints.isEmpty) {
-          areaPoints.add(Offset(canvasX, originY));
-        }
-        areaPoints.add(Offset(canvasX, canvasY));
-        firstPointInArea = false;
-      }
-    }
-
-    canvas.drawPath(functionPath, functionPaint);
-
-    if (areaPoints.length > 1) {
-      double endAreaCanvasX = (upperLimit - xPlotMin) * scaleX;
-      if (endAreaCanvasX >= 0 && endAreaCanvasX <= size.width) {
-        if (areaPoints.last.dx != endAreaCanvasX) {
-          areaPoints.add(Offset(endAreaCanvasX, originY));
-        } else {
-          areaPoints.last = Offset(endAreaCanvasX, originY);
-        }
-      } else {
-        areaPoints.add(Offset(areaPoints.last.dx, originY));
-      }
-
-      Path areaPath = Path();
-      areaPath.moveTo(areaPoints.first.dx, areaPoints.first.dy);
-      for (int i = 1; i < areaPoints.length; i++) {
-        areaPath.lineTo(areaPoints[i].dx, areaPoints[i].dy);
-      }
-      areaPath.close();
-      canvas.drawPath(areaPath, areaPaint);
-    }
+    if (value > -0.001 && value < 0.001) text = "0"; // Asegurar que 0 se muestre como 0
+    return SideTitleWidget(axisSide: meta.axisSide, space: 8.0, child: Text(text, style: style));
   }
 
-  void _drawText(Canvas canvas, String text, Offset position, TextStyle style) {
-    final textSpan = TextSpan(text: text, style: style);
-    final textPainter = TextPainter(
-      text: textSpan,
-      textDirection: TextDirection.ltr,
-    );
-    textPainter.layout();
-    textPainter.paint(canvas, position);
+  Widget _leftTitleWidgets(double value, TitleMeta meta) {
+    const style = TextStyle(color: Colors.black54, fontWeight: FontWeight.bold, fontSize: 12);
+    String text; double interval = meta.appliedInterval;
+    if (interval >= 1.0) {
+      text = value.toInt().toString();
+    } else {
+      text = value.toStringAsFixed(1);
+    }
+    if (value > -0.001 && value < 0.001) text = "0";
+    return SideTitleWidget(axisSide: meta.axisSide, space: 8.0, child: Text(text, style: style, textAlign: TextAlign.right));
   }
 
+  double _calculateInterval(List<double> values) {
+    if (values.isEmpty) return 1.0;
+    final finiteValues = values.where((v) => v.isFinite).toList();
+    if (finiteValues.isEmpty) return 1.0;
+    double minVal = finiteValues.reduce(math.min); double maxVal = finiteValues.reduce(math.max);
+    double range = maxVal - minVal;
+    if (range <= 1e-9 || !range.isFinite) { // Usar un epsilon pequeño para rangos muy cercanos a cero
+      // Si el rango es muy pequeño, basar el intervalo en la magnitud del valor
+      double absMax = math.max(minVal.abs(), maxVal.abs());
+      if (absMax < 1e-9) return 0.1; // Intervalo pequeño si cerca de 0
+      // Calcular magnitud para logaritmo base 10
+      double log10AbsMax = absMax == 0 ? -1 : math.log(absMax) / math.ln10; // Evitar log(0)
+      return math.pow(10, log10AbsMax.floor() -1).toDouble().clamp(1e-6, 1.0); // Intervalo basado en magnitud
+    }
+    // Intentar ~5-6 intervalos visibles
+    double interval = range / 5.0;
+    if (interval <= 0 || !interval.isFinite) return 1.0;
+    try {
+      // Redondeo a número "agradable" (potencia de 10, 5, 2)
+      double log10Interval = math.log(interval) / math.ln10;
+      double magnitude = math.pow(10, log10Interval.floor()).toDouble();
+      if (magnitude <= 0 || !magnitude.isFinite) return 1.0;
+      double residual = interval / magnitude; // >= 1.0
+      double niceInterval;
+      if (residual > 5) niceInterval = 10 * magnitude;
+      else if (residual > 2) niceInterval = 5 * magnitude;
+      else if (residual > 1) niceInterval = 2 * magnitude;
+      else niceInterval = 1 * magnitude;
+      // Asegurarse de que el intervalo no sea extremadamente pequeño
+      return niceInterval.clamp(1e-6, double.maxFinite);
+    } catch (e) { print("Error calc interval: $e"); return 1.0; }
+  }
+
+
   @override
-  bool shouldRepaint(covariant FunctionGraphPainter oldDelegate) {
-    return oldDelegate.function != function ||
-        oldDelegate.lowerLimit != lowerLimit ||
-        oldDelegate.upperLimit != upperLimit;
+  void dispose() {
+    _expressionController.dispose(); _minXController.dispose(); _maxXController.dispose();
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
   }
 }

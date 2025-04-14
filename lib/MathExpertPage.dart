@@ -22,7 +22,8 @@ class MathExpertPage extends StatefulWidget {
   State<MathExpertPage> createState() => _MathExpertPageState();
 }
 
-class _MathExpertPageState extends State<MathExpertPage> {
+// --- NUEVO: Añadir WidgetsBindingObserver ---
+class _MathExpertPageState extends State<MathExpertPage> with WidgetsBindingObserver {
   final TextEditingController _controller = TextEditingController();
   List<Map<String, dynamic>> _chatHistory = [];
   bool _isLoading = false;
@@ -88,6 +89,25 @@ El usuario puede proporcionar:
     print("Math Page - Initial Chat ID: $_chatId");
     _initializeModel();
     _textFieldValue.value = _controller.text;
+    // --- NUEVO: Registrar el observador ---
+    WidgetsBinding.instance.addObserver(this);
+  }
+
+  // --- NUEVO: Método del ciclo de vida ---
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    super.didChangeAppLifecycleState(state);
+    // Si la app se reanuda (vuelve del segundo plano)
+    if (state == AppLifecycleState.resumed) {
+      // Forzar un redibujo de la UI
+      if (mounted) {
+        setState(() {
+          // No es necesario cambiar nada aquí, solo llamar a setState
+          // para que Flutter reconstruya el widget y refresque la UI.
+          print("Math Page - App resumed, forcing UI redraw.");
+        });
+      }
+    }
   }
 
   void _setChatIdBasedOnUser() {
@@ -256,6 +276,7 @@ El usuario puede proporcionar:
       _chatHistory.add(userMessageForHistory);
       _pendingUserMessage = null;
       _controller.clear();
+      _textFieldValue.value = ''; // Limpiar valor del notifier también
     });
     _scrollToBottom(jump: false);
 
@@ -275,18 +296,30 @@ El usuario puede proporcionar:
       List<Content> conversationHistoryForGemini = _chatHistory
           .where((msg) => msg['role'] == 'user' || msg['role'] == 'assistant')
           .map((msg) {
-        if (msg['fileName'] != null) {
-          return Content.text("${msg['text'] ?? ''}\n[Imagen adjunta: ${msg['fileName']}]");
+        List<Part> currentParts = [];
+        // Añadir texto si existe
+        if (msg['text'] != null && (msg['text'] as String).trim().isNotEmpty) {
+          currentParts.add(TextPart(msg['text']));
         }
-        return Content.text(msg['text'] ?? '');
-      })
-          .toList();
+        // Añadir imagen si existe (solo para mensajes del usuario)
+        if (msg['role'] == 'user' && msg['imageBytes'] != null && msg['mimeType'] != null) {
+          currentParts.add(DataPart(msg['mimeType'], msg['imageBytes']));
+        }
+        // Determinar el rol para Gemini
+        final role = msg['role'] == 'assistant' ? 'model' : 'user';
+        // Crear el Content object
+        if (currentParts.isNotEmpty) {
+          return Content(role, currentParts);
+        } else {
+          // Manejar caso donde no hay partes (aunque no debería ocurrir con la lógica actual)
+          return Content(role, [TextPart('')]); // Enviar texto vacío si no hay nada más
+        }
+      }).toList();
 
-      print("Math Page - Sending content to Gemini with history: $conversationHistoryForGemini");
-      final response = await _model!.generateContent([
-        ...conversationHistoryForGemini,
-        Content.multi(partsForGemini),
-      ]);
+
+      print("Math Page - Sending content to Gemini with history: ${conversationHistoryForGemini.length} items");
+      final response = await _model!.generateContent(conversationHistoryForGemini); // Enviar el historial directamente
+
 
       print("Math Page - Response received: ${response.text}");
       final assistantMessage = {
@@ -353,13 +386,14 @@ El usuario puede proporcionar:
       final result = await FilePicker.platform.pickFiles(
         type: FileType.image,
         allowMultiple: false,
-        withData: kIsWeb,
+        withData: kIsWeb, // Cargar bytes directamente en web
+        // withReadStream: !kIsWeb, // Usar stream en móvil si los archivos son grandes (opcional)
       );
 
       if (result != null && result.files.isNotEmpty) {
         final file = result.files.first;
 
-        if (file.size > 5 * 1024 * 1024) {
+        if (file.size > 5 * 1024 * 1024) { // Límite de 5MB
           if (mounted) {
             ScaffoldMessenger.of(context).showSnackBar(
               const SnackBar(content: Text('La imagen excede el límite de 5MB.')),
@@ -371,14 +405,15 @@ El usuario puede proporcionar:
         if (mounted) {
           setState(() {
             _selectedFile = file;
-            _isPreviewExpanded = true;
+            _isPreviewExpanded = true; // Mostrar previsualización por defecto
+            // Añadir mensaje informativo al historial local (no se guarda en Firestore)
             _chatHistory.add({
               'role': 'system',
               'text': 'Imagen subida: ${file.name}',
               'timestamp': DateTime.now(),
             });
           });
-          _scrollToBottom(jump: false);
+          _scrollToBottom(jump: false); // Desplazar hacia abajo
           print("Math Page - Image selected: ${_selectedFile?.name}");
         }
       } else {
@@ -397,15 +432,16 @@ El usuario puede proporcionar:
   void _removeImage() {
     if (mounted && _selectedFile != null) {
       setState(() {
+        // Añadir mensaje informativo al historial local
         _chatHistory.add({
           'role': 'system',
           'text': 'Imagen eliminada: ${_selectedFile!.name}',
           'timestamp': DateTime.now(),
         });
         _selectedFile = null;
-        _isPreviewExpanded = false;
+        _isPreviewExpanded = false; // Ocultar previsualización
       });
-      _scrollToBottom(jump: false);
+      _scrollToBottom(jump: false); // Desplazar hacia abajo
       print("Math Page - Selected image removed.");
     }
   }
@@ -429,46 +465,53 @@ El usuario puede proporcionar:
       ),
     );
 
-    if (confirm != true) return;
+    if (confirm != true) return; // Si el usuario cancela
 
-    if (mounted) setState(() => _isLoading = true);
+    if (mounted) setState(() => _isLoading = true); // Mostrar indicador de carga
 
+    // Mensaje de bienvenida a añadir después de limpiar
     final welcomeMessage = {
       'role': 'assistant',
       'text': _chatId != null ? _initialWelcomeMessageText : _loginPromptMessageText,
-      'timestamp': DateTime.now(),
+      'timestamp': DateTime.now(), // Usar DateTime local para el mensaje inicial
     };
 
     if (_chatId != null) {
+      // Usuario autenticado: Limpiar Firestore
       print("Math Page - Clearing Firestore for $_chatId/math_messages...");
       try {
         final ref = _firestore.collection('chats').doc(_chatId).collection('math_messages');
+        // Borrar en lotes para evitar problemas con colecciones grandes
         QuerySnapshot snapshot;
         int deletedCount = 0;
         do {
-          snapshot = await ref.limit(100).get();
+          snapshot = await ref.limit(100).get(); // Obtener hasta 100 docs
           if (snapshot.docs.isNotEmpty) {
             final batch = _firestore.batch();
             for (var doc in snapshot.docs) {
-              batch.delete(doc.reference);
+              batch.delete(doc.reference); // Añadir borrado al lote
             }
-            await batch.commit();
+            await batch.commit(); // Ejecutar el lote
             deletedCount += snapshot.docs.length;
             print("Lote de ${snapshot.docs.length} mensajes borrado (total: $deletedCount).");
           }
-        } while (snapshot.docs.isNotEmpty);
+        } while (snapshot.docs.isNotEmpty); // Repetir si aún quedan documentos
+
         print("Math Page - Firestore history cleared.");
 
+        // Guardar el mensaje de bienvenida inicial en Firestore
         await _saveMessageToFirestore(welcomeMessage);
 
+        // Actualizar UI local solo después de confirmar el borrado y guardado
         if (mounted) {
           setState(() {
-            _chatHistory = [welcomeMessage];
-            _isLoading = false;
-            _initialScrollExecuted = false;
+            _chatHistory = [welcomeMessage]; // Reiniciar historial local
+            _isLoading = false; // Ocultar indicador
+            _initialScrollExecuted = false; // Permitir scroll inicial de nuevo
           });
         }
-        _scrollToBottom(jump: true);
+        _scrollToBottom(jump: true); // Ir al final (al mensaje de bienvenida)
+
       } catch (e) {
         print("Math Page - Error clearing Firestore: $e");
         final err = {
@@ -478,6 +521,7 @@ El usuario puede proporcionar:
         };
         if (mounted) {
           setState(() {
+            // Mostrar error y mensaje de bienvenida
             _chatHistory = [err, welcomeMessage];
             _isLoading = false;
           });
@@ -485,10 +529,11 @@ El usuario puede proporcionar:
         _scrollToBottom(jump: true);
       }
     } else {
+      // Usuario no autenticado: Limpiar solo historial local
       if (mounted) {
         setState(() {
-          _chatHistory = [welcomeMessage];
-          _isLoading = false;
+          _chatHistory = [welcomeMessage]; // Reiniciar historial local
+          _isLoading = false; // Ocultar indicador
         });
       }
       _scrollToBottom(jump: true);
@@ -496,99 +541,133 @@ El usuario puede proporcionar:
   }
 
   Future<void> _downloadHistory() async {
+    // 1. Filtrar mensajes relevantes para la descarga
     final downloadableHistory = _chatHistory.where((msg) {
       final role = msg['role']?.toString().toUpperCase() ?? 'SYSTEM';
       final text = msg['text'] ?? '';
-      if (role == 'SYSTEM' &&
-          (text.contains('subida:') ||
-              text.contains('eliminada:') ||
-              text.contains('inicializada') ||
-              text.contains('Error:'))) {
+      // Excluir mensajes del sistema internos
+      if (role == 'SYSTEM' && (text.contains('subida:') || text.contains('eliminada:') || text.contains('inicializada') || text.contains('Error:'))) {
         return false;
       }
-      if (role == 'ASSISTANT' &&
-          (text == _initialWelcomeMessageText || text == 'Inicia sesión para guardar y ver tu historial.'))
+      // Excluir mensajes iniciales de bienvenida/login
+      if (role == 'ASSISTANT' && (text == _initialWelcomeMessageText || text == _loginPromptMessageText)) {
         return false;
-      return true;
+      }
+      return true; // Incluir mensajes de usuario y respuestas del asistente
     }).toList();
 
-    if (downloadableHistory.isEmpty) {
+    // 2. Verificar si hay mensajes del usuario (texto o imagen)
+    final hasUserMessages = _chatHistory.any((msg) =>
+    msg['role'] == 'user' &&
+        (msg['text']?.toString().trim().isNotEmpty == true || msg['fileName'] != null)
+    );
+
+    // 3. En Android, bloquear la descarga si no hay mensajes del usuario
+    //    (Evita descargar solo el mensaje de bienvenida si no se ha interactuado)
+    if (!kIsWeb && Platform.isAndroid && !hasUserMessages) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('No hay historial relevante para descargar.')),
+          const SnackBar(
+            content: Text('No hay preguntas enviadas para descargar.'),
+          ),
         );
       }
       return;
     }
 
-    if (mounted) setState(() => _isLoading = true);
+
+    // 4. Si no hay mensajes *relevantes* para descargar (después de filtrar)
+    if (downloadableHistory.isEmpty) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('No hay historial relevante para descargar.'),
+          ),
+        );
+      }
+      return;
+    }
+
+
+    if (mounted) setState(() => _isLoading = true); // Mostrar carga
 
     try {
+      // 5. Crear el contenido del archivo de texto
       final StringBuffer buffer = StringBuffer();
       buffer.writeln("Historial del Chat de Matemáticas");
       buffer.writeln("=" * 30);
       buffer.writeln("Exportado el: ${DateFormat('yyyy-MM-dd HH:mm:ss').format(DateTime.now().toLocal())}");
-      buffer.writeln();
+      buffer.writeln(); // Línea en blanco
+
       final DateFormat formatter = DateFormat('yyyy-MM-dd HH:mm:ss');
 
       for (final message in downloadableHistory) {
         final role = message['role']?.toString().toUpperCase() ?? 'SYSTEM';
         final text = message['text'] ?? '';
-        dynamic ts = message['timestamp'];
+        dynamic ts = message['timestamp']; // Puede ser Timestamp o DateTime
         String timestampStr = 'N/A';
 
+        // Formatear timestamp de forma segura
         try {
           if (ts is Timestamp) {
             timestampStr = formatter.format(ts.toDate().toLocal());
           } else if (ts is DateTime) {
             timestampStr = formatter.format(ts.toLocal());
           } else {
+            // Fallback por si acaso (no debería ocurrir)
             timestampStr = formatter.format(DateTime.now().toLocal());
           }
         } catch (e) {
           print("Error formateando timestamp para descarga: $e");
-          timestampStr = formatter.format(DateTime.now().toLocal());
+          timestampStr = formatter.format(DateTime.now().toLocal()); // Fallback
         }
+
 
         buffer.writeln("[$timestampStr] $role:");
         buffer.writeln(text);
         if (message['fileName'] != null) {
           buffer.writeln("  [Archivo adjunto: ${message['fileName']}]");
         }
-        buffer.writeln("-" * 20);
+        buffer.writeln("-" * 20); // Separador
       }
 
+      // 6. Preparar y guardar/descargar el archivo
       final String fileContent = buffer.toString();
       final String fileName = 'historial_matematicas_${DateFormat('yyyyMMdd_HHmmss').format(DateTime.now())}.txt';
-      final List<int> fileBytes = utf8.encode(fileContent);
+      final List<int> fileBytes = utf8.encode(fileContent); // Convertir a bytes UTF-8
 
       if (kIsWeb) {
+        // Descarga en Web usando dart:html
         final blob = html.Blob([fileBytes], 'text/plain', 'native');
         final url = html.Url.createObjectUrlFromBlob(blob);
         final anchor = html.AnchorElement(href: url)
           ..setAttribute("download", fileName)
-          ..click();
-        html.Url.revokeObjectUrl(url);
+          ..click(); // Simular clic para descargar
+        html.Url.revokeObjectUrl(url); // Liberar memoria
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(content: Text('Descarga iniciada (Web).')),
           );
         }
       } else {
+        // Guardar archivo en Móvil/Escritorio usando file_picker
         String? outputFile = await FilePicker.platform.saveFile(
           dialogTitle: 'Guardar Historial Matemáticas',
           fileName: fileName,
-          bytes: Uint8List.fromList(fileBytes),
+          bytes: Uint8List.fromList(fileBytes), // file_picker necesita Uint8List
         );
 
         if (outputFile == null) {
+          // Usuario canceló el guardado
           if (mounted) {
             ScaffoldMessenger.of(context).showSnackBar(
               const SnackBar(content: Text('Guardado cancelado.')),
             );
           }
         } else {
+          // Archivo guardado exitosamente
           if (mounted) {
+            // Extraer solo el nombre del archivo de la ruta completa
             final savedFileName = outputFile.split(Platform.pathSeparator).last;
             ScaffoldMessenger.of(context).showSnackBar(
               SnackBar(content: Text('Historial guardado como: $savedFileName')),
@@ -604,43 +683,54 @@ El usuario puede proporcionar:
         );
       }
     } finally {
-      if (mounted) setState(() => _isLoading = false);
+      if (mounted) setState(() => _isLoading = false); // Ocultar carga
     }
   }
+
 
   @override
   void dispose() {
     _controller.dispose();
     _scrollController.dispose();
     _textFieldValue.dispose();
+    // --- NUEVO: Remover el observador ---
+    WidgetsBinding.instance.removeObserver(this);
     super.dispose();
   }
 
   void _scrollToBottom({required bool jump}) {
+    // Usar addPostFrameCallback para asegurar que el layout esté completo
     WidgetsBinding.instance.addPostFrameCallback((_) {
+      // Verificar si el controlador tiene clientes (está adjunto a un Scrollable)
       if (_scrollController.hasClients) {
         final maxExtent = _scrollController.position.maxScrollExtent;
         if (jump) {
+          // Saltar directamente al final (útil para carga inicial)
           _scrollController.jumpTo(maxExtent);
         } else {
+          // Animar suavemente hasta el final (útil para nuevos mensajes)
           _scrollController.animateTo(
             maxExtent,
-            duration: const Duration(milliseconds: 300),
-            curve: Curves.easeOut,
+            duration: const Duration(milliseconds: 300), // Duración de la animación
+            curve: Curves.easeOut, // Curva de animación
           );
         }
       } else {
+        // Si no hay clientes aún, reintentar después de un breve retraso
+        // Esto puede pasar si se llama antes de que el ListView esté completamente construido
         Future.delayed(const Duration(milliseconds: 100), () => _scrollToBottom(jump: jump));
       }
     });
   }
 
+
   @override
   Widget build(BuildContext context) {
-    return LayoutBuilder(
+    return LayoutBuilder( // Usar LayoutBuilder para adaptar a diferentes anchos
       builder: (context, constraints) {
-        bool isWideScreen = constraints.maxWidth > 720;
-        double chatBubbleMaxWidth = isWideScreen ? 600 : constraints.maxWidth * 0.85;
+        bool isWideScreen = constraints.maxWidth > 720; // Definir punto de corte para pantalla ancha
+        double chatBubbleMaxWidth = isWideScreen ? 600 : constraints.maxWidth * 0.85; // Ancho máximo de burbuja
+        // Determinar si se puede descargar (no cargando y hay contenido relevante)
         bool hasDownloadableContent = !_isLoading && _chatHistory.any((msg) {
           final role = msg['role']?.toString().toUpperCase() ?? 'SYSTEM';
           final text = msg['text'] ?? '';
@@ -653,41 +743,49 @@ El usuario puede proporcionar:
           appBar: AppBar(
             title: const Text('Math Expert'),
             centerTitle: true,
-            elevation: 1,
-            leading: IconButton(
+            elevation: 1, // Sombra sutil
+            leading: IconButton( // Botón para volver atrás
               icon: const Icon(Icons.arrow_back),
               onPressed: () => Navigator.canPop(context) ? Navigator.pop(context) : null,
             ),
             actions: [
+              // Botón Descargar Historial
               IconButton(
                 icon: const Icon(Icons.download_outlined),
-                onPressed: hasDownloadableContent ? _downloadHistory : null,
+                onPressed: hasDownloadableContent ? _downloadHistory : null, // Habilitar solo si hay contenido
                 tooltip: 'Descargar historial',
-                color: hasDownloadableContent ? null : Colors.grey,
+                color: hasDownloadableContent ? null : Colors.grey, // Color gris si está deshabilitado
               ),
+              // Botón Limpiar Chat
               IconButton(
                 icon: const Icon(Icons.delete_outline),
-                onPressed: _isLoading ? null : _clearChat,
+                onPressed: _isLoading ? null : _clearChat, // Deshabilitar si está cargando
                 tooltip: 'Limpiar chat',
-                color: _isLoading ? Colors.grey : null,
+                color: _isLoading ? Colors.grey : null, // Color gris si está deshabilitado
               ),
             ],
           ),
-          body: SafeArea(
+          body: SafeArea( // Asegura que el contenido no se solape con barras del sistema
             child: Column(
               children: [
+                // Área del Chat (Expandida)
                 Expanded(
                   child: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-                    stream: _getChatStream(),
+                    stream: _getChatStream(), // Escuchar mensajes de Firestore si está autenticado
                     builder: (context, snapshot) {
+                      // --- Manejo de Estados del Stream ---
+                      // Esperando conexión o carga inicial de Firestore
                       if (snapshot.connectionState == ConnectionState.waiting && _chatId != null) {
                         return const Center(child: CircularProgressIndicator());
                       }
+                      // Error en el stream
                       if (snapshot.hasError) {
                         print("Math Page - StreamBuilder Error: ${snapshot.error}");
                         return Center(child: Text('Error al cargar mensajes: ${snapshot.error}'));
                       }
+                      // Usuario no autenticado (no hay stream)
                       if (_chatId == null) {
+                        // Si el historial local está vacío, añadir mensaje de login
                         if (_chatHistory.isEmpty) {
                           _chatHistory.add({
                             'role': 'assistant',
@@ -695,35 +793,45 @@ El usuario puede proporcionar:
                             'timestamp': DateTime.now(),
                           });
                         }
+                        // No hacer nada más, se usará _chatHistory local
                       }
 
+                      // --- Procesamiento de Mensajes ---
                       final List<Map<String, dynamic>> messagesFromStream;
                       if (snapshot.hasData && snapshot.data!.docs.isNotEmpty) {
+                        // Datos recibidos de Firestore
                         messagesFromStream = snapshot.data!.docs.map((doc) {
                           final data = doc.data();
-                          data['id'] = doc.id;
+                          data['id'] = doc.id; // Añadir ID del documento
+                          // Convertir Timestamp a DateTime si es necesario
                           if (data['timestamp'] is Timestamp) {
                             data['timestamp'] = (data['timestamp'] as Timestamp).toDate();
                           } else if (data['timestamp'] is! DateTime) {
-                            data['timestamp'] = DateTime.now();
+                            data['timestamp'] = DateTime.now(); // Fallback
                           }
                           return data;
                         }).toList();
-                        _chatHistory = messagesFromStream; // Sincronizar con Firestore
+                        // Sincronizar historial local con Firestore
+                        _chatHistory = messagesFromStream;
                       } else {
+                        // No hay datos en Firestore (o usuario no autenticado)
                         messagesFromStream = [];
-                        if (_chatHistory.isEmpty) {
+                        // Si el historial local está vacío (y no es el caso de login), añadir bienvenida
+                        if (_chatHistory.isEmpty && _chatId != null) {
                           _chatHistory.add({
                             'role': 'assistant',
                             'text': _initialWelcomeMessageText,
                             'timestamp': DateTime.now(),
                           });
                         }
+                        // Si _chatId es null, el mensaje de login ya se añadió arriba
                       }
 
+                      // Combinar historial con mensaje pendiente (si existe)
                       final allMessages = [..._chatHistory];
                       if (_pendingUserMessage != null) {
                         allMessages.add(_pendingUserMessage!);
+                        // Reordenar por si acaso (aunque normalmente se añade al final)
                         allMessages.sort((a, b) {
                           DateTime aTime = a['timestamp'] is Timestamp ? (a['timestamp'] as Timestamp).toDate() : a['timestamp'] as DateTime;
                           DateTime bTime = b['timestamp'] is Timestamp ? (b['timestamp'] as Timestamp).toDate() : b['timestamp'] as DateTime;
@@ -731,75 +839,86 @@ El usuario puede proporcionar:
                         });
                       }
 
+                      // --- Lógica de Scroll Automático ---
                       final currentMessageCount = allMessages.length;
+                      // Scroll inicial al cargar por primera vez
                       if (currentMessageCount > 0 && !_initialScrollExecuted) {
                         print("Math Page - Initial load ($currentMessageCount messages).");
                         WidgetsBinding.instance.addPostFrameCallback((_) => _scrollToBottom(jump: true));
                         _initialScrollExecuted = true;
-                      } else if (currentMessageCount > _previousMessageCount && _initialScrollExecuted) {
+                      }
+                      // Scroll suave para nuevos mensajes
+                      else if (currentMessageCount > _previousMessageCount && _initialScrollExecuted) {
                         print("Math Page - New message ($currentMessageCount > $_previousMessageCount).");
                         WidgetsBinding.instance.addPostFrameCallback((_) => _scrollToBottom(jump: false));
                       }
-                      _previousMessageCount = currentMessageCount;
+                      _previousMessageCount = currentMessageCount; // Actualizar contador
 
-                      return AnimatedSwitcher(
+
+                      // --- Construcción de la Lista de Mensajes ---
+                      return AnimatedSwitcher( // Animación suave al cambiar la lista
                         duration: const Duration(milliseconds: 300),
                         child: ListView.builder(
-                          key: ValueKey(allMessages.length),
-                          controller: _scrollController,
-                          padding: EdgeInsets.symmetric(horizontal: isWideScreen ? 24.0 : 16.0, vertical: 16.0),
+                          key: ValueKey(allMessages.length), // Key para forzar reconstrucción en AnimatedSwitcher
+                          controller: _scrollController, // Controlador para scroll
+                          padding: EdgeInsets.symmetric(horizontal: isWideScreen ? 24.0 : 16.0, vertical: 16.0), // Padding adaptable
                           itemCount: allMessages.length,
                           itemBuilder: (context, index) {
                             final message = allMessages[index];
                             final role = message['role'] as String? ?? 'system';
                             final text = message['text'] as String? ?? '';
                             final fileName = message['fileName'] as String?;
-                            final imageBytes = message['imageBytes'] as Uint8List?;
+                            final imageBytes = message['imageBytes'] as Uint8List?; // Bytes para mostrar imagen
                             final isUser = role == 'user';
-                            final isSystem = role == 'system';
+                            final isSystem = role == 'system'; // Mensajes del sistema (errores, etc.)
 
+                            // Key única para cada elemento, ayuda a Flutter a optimizar
                             final key = ValueKey(message['id'] ?? message['timestamp'].toString());
 
+                            // --- Estilos y Alineación por Rol ---
                             Color backgroundColor;
                             Color textColor;
                             Alignment alignment;
                             TextAlign textAlign;
-                            CrossAxisAlignment crossAxisAlignment;
+                            CrossAxisAlignment crossAxisAlignment; // Alineación vertical dentro de la burbuja
 
                             if (isUser) {
                               backgroundColor = Colors.teal[100]!;
                               textColor = Colors.teal[900]!;
-                              alignment = Alignment.centerRight;
-                              textAlign = TextAlign.left;
+                              alignment = Alignment.centerRight; // A la derecha
+                              textAlign = TextAlign.left; // Texto alineado a la izquierda dentro de la burbuja
                               crossAxisAlignment = CrossAxisAlignment.start;
                             } else if (isSystem) {
                               backgroundColor = Colors.orange[100]!;
                               textColor = Colors.orange[900]!;
-                              alignment = Alignment.center;
+                              alignment = Alignment.center; // Centrado
                               textAlign = TextAlign.center;
                               crossAxisAlignment = CrossAxisAlignment.center;
-                            } else {
+                            } else { // Assistant
                               backgroundColor = Colors.grey[200]!;
                               textColor = Colors.black87;
-                              alignment = Alignment.centerLeft;
+                              alignment = Alignment.centerLeft; // A la izquierda
                               textAlign = TextAlign.left;
                               crossAxisAlignment = CrossAxisAlignment.start;
                             }
 
+                            // Ocultar mensajes internos del sistema de subida/eliminación
                             if (isSystem && (text.contains('subida:') || text.contains('eliminada:'))) {
-                              return const SizedBox.shrink();
+                              return const SizedBox.shrink(); // No mostrar nada
                             }
 
-                            return Align(
+
+                            // --- Construcción de la Burbuja del Mensaje ---
+                            return Align( // Alinear la burbuja completa
                               key: key,
                               alignment: alignment,
                               child: Container(
-                                margin: const EdgeInsets.symmetric(vertical: 5.0),
-                                padding: const EdgeInsets.symmetric(horizontal: 14.0, vertical: 10.0),
+                                margin: const EdgeInsets.symmetric(vertical: 5.0), // Margen vertical
+                                padding: const EdgeInsets.symmetric(horizontal: 14.0, vertical: 10.0), // Padding interno
                                 decoration: BoxDecoration(
                                   color: backgroundColor,
-                                  borderRadius: BorderRadius.circular(16.0),
-                                  boxShadow: [
+                                  borderRadius: BorderRadius.circular(16.0), // Bordes redondeados
+                                  boxShadow: [ // Sombra sutil
                                     BoxShadow(
                                       color: Colors.grey.withOpacity(0.2),
                                       spreadRadius: 1,
@@ -808,62 +927,68 @@ El usuario puede proporcionar:
                                     ),
                                   ],
                                 ),
-                                constraints: BoxConstraints(maxWidth: chatBubbleMaxWidth),
-                                child: Column(
+                                constraints: BoxConstraints(maxWidth: chatBubbleMaxWidth), // Ancho máximo
+                                child: Column( // Para poner imagen y texto verticalmente si es necesario
                                   crossAxisAlignment: crossAxisAlignment,
-                                  mainAxisSize: MainAxisSize.min,
+                                  mainAxisSize: MainAxisSize.min, // Ajustar tamaño al contenido
                                   children: [
+                                    // Mostrar imagen si es mensaje de usuario y tiene imagen
                                     if (isUser && fileName != null && imageBytes != null)
                                       Padding(
                                         padding: const EdgeInsets.only(bottom: 8.0),
                                         child: Column(
                                           crossAxisAlignment: CrossAxisAlignment.start,
                                           children: [
+                                            // Nombre del archivo
                                             Row(
                                               mainAxisSize: MainAxisSize.min,
                                               children: [
                                                 Icon(Icons.image_outlined, size: 16, color: textColor.withOpacity(0.8)),
                                                 const SizedBox(width: 4),
-                                                Flexible(
+                                                Flexible( // Para que el texto no se desborde
                                                   child: Text(
                                                     fileName,
                                                     style: TextStyle(fontSize: 13, fontStyle: FontStyle.italic, color: textColor.withOpacity(0.8)),
-                                                    overflow: TextOverflow.ellipsis,
+                                                    overflow: TextOverflow.ellipsis, // Poner puntos suspensivos si es largo
                                                   ),
                                                 ),
                                               ],
                                             ),
                                             const SizedBox(height: 6),
-                                            ClipRRect(
+                                            // Previsualización de la imagen
+                                            ClipRRect( // Para redondear esquinas de la imagen
                                               borderRadius: BorderRadius.circular(8),
                                               child: Image.memory(
                                                 imageBytes,
-                                                fit: BoxFit.contain,
-                                                height: 100,
+                                                fit: BoxFit.contain, // Ajustar sin distorsionar
+                                                height: 100, // Altura fija para la previsualización
+                                                // Manejo de error si la imagen no carga
                                                 errorBuilder: (c, e, s) => const Text('Error al mostrar imagen'),
                                               ),
                                             ),
                                           ],
                                         ),
                                       ),
+                                    // Mostrar texto si existe
                                     if (text.isNotEmpty)
-                                      (role == 'assistant')
+                                      (role == 'assistant') // Usar Markdown para respuestas del asistente
                                           ? MarkdownBody(
                                         data: text,
-                                        selectable: true,
+                                        selectable: true, // Permitir seleccionar texto
                                         styleSheet: MarkdownStyleSheet.fromTheme(Theme.of(context)).copyWith(
-                                          p: Theme.of(context).textTheme.bodyMedium?.copyWith(color: textColor, height: 1.4),
-                                          code: Theme.of(context).textTheme.bodyMedium?.copyWith(fontFamily: 'monospace', backgroundColor: Colors.black12, color: textColor),
+                                          // Estilos personalizados para Markdown
+                                          p: Theme.of(context).textTheme.bodyMedium?.copyWith(color: textColor, height: 1.4), // Estilo de párrafo
+                                          code: Theme.of(context).textTheme.bodyMedium?.copyWith(fontFamily: 'monospace', backgroundColor: Colors.black12, color: textColor), // Estilo de código
                                         ),
                                       )
-                                          : SelectableText(
+                                          : SelectableText( // Texto normal seleccionable para usuario y sistema
                                         text,
                                         textAlign: textAlign,
                                         style: TextStyle(
                                           color: textColor,
-                                          fontStyle: isSystem ? FontStyle.italic : FontStyle.normal,
-                                          fontSize: isSystem ? 13 : 16,
-                                          height: 1.4,
+                                          fontStyle: isSystem ? FontStyle.italic : FontStyle.normal, // Cursiva para sistema
+                                          fontSize: isSystem ? 13 : 16, // Tamaño diferente para sistema
+                                          height: 1.4, // Espaciado de línea
                                         ),
                                       ),
                                   ],
@@ -876,117 +1001,129 @@ El usuario puede proporcionar:
                     },
                   ),
                 ),
+
+                // Previsualización de Imagen Seleccionada (si existe)
                 if (_selectedFile != null)
                   Padding(
-                    padding: EdgeInsets.fromLTRB(isWideScreen ? 24.0 : 8.0, 0, isWideScreen ? 24.0 : 8.0, 8.0),
-                    child: Card(
+                    padding: EdgeInsets.fromLTRB(isWideScreen ? 24.0 : 8.0, 0, isWideScreen ? 24.0 : 8.0, 8.0), // Padding adaptable
+                    child: Card( // Usar Card para darle un fondo y elevación
                       elevation: 2,
-                      margin: EdgeInsets.zero,
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                      margin: EdgeInsets.zero, // Sin margen externo adicional
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)), // Bordes redondeados
                       child: Padding(
-                        padding: const EdgeInsets.all(8.0),
+                        padding: const EdgeInsets.all(8.0), // Padding interno
                         child: Column(
                           children: [
+                            // Fila con icono, nombre y botones
                             Row(
                               children: [
-                                Icon(Icons.image_outlined, color: Colors.teal, size: 20),
+                                Icon(Icons.image_outlined, color: Colors.teal, size: 20), // Icono
                                 const SizedBox(width: 8),
-                                Expanded(child: Text(_selectedFile!.name, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 13))),
+                                Expanded(child: Text(_selectedFile!.name, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 13))), // Nombre (con elipsis)
+                                // Botón Mostrar/Ocultar
                                 TextButton(
                                   style: TextButton.styleFrom(padding: EdgeInsets.zero, minimumSize: const Size(60, 30), tapTargetSize: MaterialTapTargetSize.shrinkWrap),
-                                  onPressed: () => setState(() => _isPreviewExpanded = !_isPreviewExpanded),
+                                  onPressed: () => setState(() => _isPreviewExpanded = !_isPreviewExpanded), // Alternar visibilidad
                                   child: Text(_isPreviewExpanded ? 'Ocultar' : 'Mostrar', style: const TextStyle(color: Colors.teal, fontSize: 13)),
                                 ),
+                                // Botón Eliminar
                                 TextButton(
                                   style: TextButton.styleFrom(padding: EdgeInsets.zero, minimumSize: const Size(60, 30), tapTargetSize: MaterialTapTargetSize.shrinkWrap),
-                                  onPressed: _isLoading ? null : _removeImage,
+                                  onPressed: _isLoading ? null : _removeImage, // Deshabilitar si está cargando
                                   child: Text('Eliminar', style: TextStyle(color: _isLoading ? Colors.grey : Colors.red, fontSize: 13)),
                                 ),
                               ],
                             ),
+                            // Contenedor animado para la previsualización
                             AnimatedSize(
                               duration: const Duration(milliseconds: 300),
                               curve: Curves.easeInOut,
-                              child: _isPreviewExpanded
-                                  ? ConstrainedBox(
-                                constraints: BoxConstraints(maxHeight: isWideScreen ? 250 : 150),
+                              child: _isPreviewExpanded // Mostrar solo si está expandido
+                                  ? ConstrainedBox( // Limitar altura máxima
+                                constraints: BoxConstraints(maxHeight: isWideScreen ? 250 : 150), // Altura adaptable
                                 child: Padding(
-                                  padding: const EdgeInsets.only(top: 8.0),
-                                  child: ClipRRect(
+                                  padding: const EdgeInsets.only(top: 8.0), // Espacio arriba
+                                  child: ClipRRect( // Redondear imagen
                                     borderRadius: BorderRadius.circular(8),
-                                    child: kIsWeb
-                                        ? (_selectedFile?.bytes != null
-                                        ? Image.memory(_selectedFile!.bytes!, fit: BoxFit.contain, errorBuilder: (c, e, s) => const Center(child: Text('Error al mostrar imagen (Web)')))
+                                    child: kIsWeb // Diferente lógica para Web y Móvil
+                                        ? (_selectedFile?.bytes != null // Mostrar desde bytes en Web
+                                        ? Image.memory(_selectedFile!.bytes!, fit: BoxFit.contain, errorBuilder: (c,e,s) => const Center(child: Text('Error al mostrar imagen (Web)')))
                                         : const Center(child: Text('Vista previa no disponible (Web)')))
-                                        : (_selectedFile?.path != null
-                                        ? Image.file(File(_selectedFile!.path!), fit: BoxFit.contain, errorBuilder: (c, e, s) => const Center(child: Text('Error al mostrar imagen (Móvil)')))
+                                        : (_selectedFile?.path != null // Mostrar desde ruta en Móvil
+                                        ? Image.file(File(_selectedFile!.path!), fit: BoxFit.contain, errorBuilder: (c,e,s) => const Center(child: Text('Error al mostrar imagen (Móvil)')))
                                         : const Center(child: Text('Vista previa no disponible (Móvil)'))),
                                   ),
                                 ),
                               )
-                                  : const SizedBox.shrink(),
+                                  : const SizedBox.shrink(), // Ocultar si no está expandido
                             ),
                           ],
                         ),
                       ),
                     ),
                   ),
+
+                // Barra de Entrada de Texto y Botones
                 Container(
-                  padding: EdgeInsets.fromLTRB(isWideScreen ? 24.0 : 8.0, 8.0, isWideScreen ? 24.0 : 8.0, 16.0),
+                  padding: EdgeInsets.fromLTRB(isWideScreen ? 24.0 : 8.0, 8.0, isWideScreen ? 24.0 : 8.0, 16.0), // Padding adaptable
                   decoration: BoxDecoration(
-                    color: Theme.of(context).cardColor,
-                    border: Border(top: BorderSide(color: Colors.grey.shade300, width: 0.5)),
+                    color: Theme.of(context).cardColor, // Color de fondo
+                    border: Border(top: BorderSide(color: Colors.grey.shade300, width: 0.5)), // Borde superior sutil
                   ),
-                  child: ValueListenableBuilder<String>(
+                  child: ValueListenableBuilder<String>( // Escuchar cambios en el TextField para habilitar/deshabilitar botón
                     valueListenable: _textFieldValue,
                     builder: (context, textValue, child) {
+                      // Determinar si se puede enviar el mensaje
                       bool canSendMessage = !_isLoading && (textValue.trim().isNotEmpty || _selectedFile != null);
                       return Row(
-                        crossAxisAlignment: CrossAxisAlignment.end,
+                        crossAxisAlignment: CrossAxisAlignment.end, // Alinear botones y campo de texto abajo
                         children: [
+                          // Botón para adjuntar imagen
                           IconButton(
-                            padding: const EdgeInsets.only(bottom: 8, right: 4),
+                            padding: const EdgeInsets.only(bottom: 8, right: 4), // Ajuste fino del padding
                             icon: const Icon(Icons.add_photo_alternate_outlined, size: 28),
-                            color: _isLoading ? Colors.grey : Colors.teal,
+                            color: _isLoading ? Colors.grey : Colors.teal, // Color adaptable
                             tooltip: 'Seleccionar Imagen',
-                            onPressed: _isLoading ? null : _pickImage,
+                            onPressed: _isLoading ? null : _pickImage, // Deshabilitar si está cargando
                           ),
+                          // Campo de texto expandido
                           Expanded(
                             child: TextField(
                               controller: _controller,
                               decoration: InputDecoration(
                                 hintText: 'Escribe tu pregunta aquí...',
-                                border: OutlineInputBorder(borderRadius: BorderRadius.circular(25.0), borderSide: BorderSide.none),
-                                focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(25.0), borderSide: BorderSide(color: Colors.teal.shade200, width: 1.5)),
+                                border: OutlineInputBorder(borderRadius: BorderRadius.circular(25.0), borderSide: BorderSide.none), // Sin borde por defecto
+                                focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(25.0), borderSide: BorderSide(color: Colors.teal.shade200, width: 1.5)), // Borde al enfocar
                                 filled: true,
-                                fillColor: Colors.grey.shade100,
-                                contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                                isDense: true,
+                                fillColor: Colors.grey.shade100, // Fondo gris claro
+                                contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12), // Padding interno
+                                isDense: true, // Hacerlo más compacto
                               ),
-                              minLines: 1,
-                              maxLines: 5,
-                              textInputAction: TextInputAction.send,
-                              onSubmitted: (value) {
+                              minLines: 1, // Mínimo 1 línea
+                              maxLines: 5, // Máximo 5 líneas antes de scroll
+                              textInputAction: TextInputAction.send, // Acción de teclado "Enviar"
+                              onSubmitted: (value) { // Enviar al presionar "Enviar" en teclado
                                 if (canSendMessage) _generateResponse(value.trim());
                               },
                               onChanged: (value) {
-                                _textFieldValue.value = value;
-                                _scrollToBottom(jump: false); // Desplazar al final mientras el usuario escribe
+                                _textFieldValue.value = value; // Actualizar notifier para habilitar/deshabilitar botón
+                                _scrollToBottom(jump: false); // Scroll mientras escribe si es necesario
                               },
-                              keyboardType: TextInputType.multiline,
-                              enabled: !_isLoading,
+                              keyboardType: TextInputType.multiline, // Permitir múltiples líneas
+                              enabled: !_isLoading, // Deshabilitar si está cargando
                               style: const TextStyle(fontSize: 16),
                             ),
                           ),
-                          const SizedBox(width: 8),
+                          const SizedBox(width: 8), // Espacio entre texto y botón enviar
+                          // Botón de Enviar
                           IconButton(
-                            padding: const EdgeInsets.only(bottom: 8, left: 4),
-                            icon: _isLoading
+                            padding: const EdgeInsets.only(bottom: 8, left: 4), // Ajuste fino
+                            icon: _isLoading // Mostrar indicador de carga o icono de enviar
                                 ? const SizedBox(width: 24, height: 24, child: CircularProgressIndicator(strokeWidth: 2))
                                 : const Icon(Icons.send, size: 28),
                             tooltip: 'Enviar Mensaje',
-                            color: canSendMessage ? Colors.teal : Colors.grey,
-                            onPressed: canSendMessage ? () => _generateResponse(_controller.text.trim()) : null,
+                            color: canSendMessage ? Colors.teal : Colors.grey, // Color adaptable
+                            onPressed: canSendMessage ? () => _generateResponse(_controller.text.trim()) : null, // Habilitar/deshabilitar
                           ),
                         ],
                       );
