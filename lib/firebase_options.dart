@@ -12,9 +12,9 @@ class DefaultFirebaseOptions {
       case TargetPlatform.iOS:
         return ios;
       case TargetPlatform.macOS:
-        throw UnsupportedError('DefaultFirebaseOptions have not been configured for macos');
+        return macos;
       case TargetPlatform.windows:
-        throw UnsupportedError('DefaultFirebaseOptions have not been configured for windows');
+        return windows;
       case TargetPlatform.linux:
         throw UnsupportedError('DefaultFirebaseOptions have not been configured for linux');
       default:
@@ -24,29 +24,48 @@ class DefaultFirebaseOptions {
 
   static const FirebaseOptions android = FirebaseOptions(
     apiKey: 'AIzaSyA9OD_rP2WFc8oo7Jz9XzcXhAWuWazwHkI',
-    appId: '1:557432249181:android:8f89075775b801024ae6b4',
+    appId: '1:557432249181:android:8e56162747f7444e4ae6b4',
     messagingSenderId: '557432249181',
     projectId: 'laboratoriodigital-982da',
     storageBucket: 'laboratoriodigital-982da.firebasestorage.app',
   );
 
   static const FirebaseOptions ios = FirebaseOptions(
-    apiKey: 'TU_API_KEY',
-    appId: 'TU_APP_ID',
-    messagingSenderId: 'TU_MESSAGING_SENDER_ID',
+    apiKey: 'AIzaSyBgYLkq0m-ceT_uRn9ozdWLNcq_03MYJF8',
+    appId: '1:557432249181:ios:fd4d59c9bbf135e14ae6b4',
+    messagingSenderId: '557432249181',
     projectId: 'laboratoriodigital-982da',
-    storageBucket: 'laboratoriodigital-982da.appspot.com',
-    iosBundleId: 'com.example.laboratoriodigital',
+    storageBucket: 'laboratoriodigital-982da.firebasestorage.app',
+    iosBundleId: 'com.example.laboratorioDigital',
   );
 
   static const FirebaseOptions web = FirebaseOptions(
     apiKey: 'AIzaSyBkwyf2zhfKVHzaEvkjdFlmTC_EQ69mzh4',
-    appId: '1:557432249181:web:8d3eee5e9ed5aa844ae6b4',
+    appId: '1:557432249181:web:0f22d3e1dfd96b424ae6b4',
     messagingSenderId: '557432249181',
     projectId: 'laboratoriodigital-982da',
     authDomain: 'laboratoriodigital-982da.firebaseapp.com',
     storageBucket: 'laboratoriodigital-982da.firebasestorage.app',
-    measurementId: 'G-GLW99CMKV3',
+    measurementId: 'G-FPESSHHV7V',
+  );
+
+  static const FirebaseOptions macos = FirebaseOptions(
+    apiKey: 'AIzaSyBgYLkq0m-ceT_uRn9ozdWLNcq_03MYJF8',
+    appId: '1:557432249181:ios:fd4d59c9bbf135e14ae6b4',
+    messagingSenderId: '557432249181',
+    projectId: 'laboratoriodigital-982da',
+    storageBucket: 'laboratoriodigital-982da.firebasestorage.app',
+    iosBundleId: 'com.example.laboratorioDigital',
+  );
+
+  static const FirebaseOptions windows = FirebaseOptions(
+    apiKey: 'AIzaSyBkwyf2zhfKVHzaEvkjdFlmTC_EQ69mzh4',
+    appId: '1:557432249181:web:aedb1e9976219ef94ae6b4',
+    messagingSenderId: '557432249181',
+    projectId: 'laboratoriodigital-982da',
+    authDomain: 'laboratoriodigital-982da.firebaseapp.com',
+    storageBucket: 'laboratoriodigital-982da.firebasestorage.app',
+    measurementId: 'G-5Y13G26XH8',
   );
 
 }

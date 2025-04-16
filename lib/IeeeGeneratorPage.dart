@@ -22,7 +22,6 @@ class IeeeGeneratorPage extends StatefulWidget {
   State<IeeeGeneratorPage> createState() => _IeeeGeneratorPageState();
 }
 
-// --- NUEVO: Añadir WidgetsBindingObserver ---
 class _IeeeGeneratorPageState extends State<IeeeGeneratorPage> with WidgetsBindingObserver {
   final TextEditingController _controller = TextEditingController();
   List<Map<String, dynamic>> _chatHistory = [];
@@ -37,7 +36,7 @@ class _IeeeGeneratorPageState extends State<IeeeGeneratorPage> with WidgetsBindi
   Map<String, dynamic>? _pendingUserMessage;
   bool _initialScrollExecuted = false;
   int _previousMessageCount = 0;
-  final _textFieldValue = ValueNotifier<String>(''); // Para el ValueListenableBuilder
+  final _textFieldValue = ValueNotifier<String>('');
 
   static const String _initialWelcomeMessageText =
       '¡Bienvenido! Soy tu experto en normas IEEE. Sube un PDF o haz una pregunta.';
@@ -93,27 +92,20 @@ El usuario puede proporcionar:
     print("IEEE Page - Initial Chat ID: $_chatId");
     _initializeModel();
     _textFieldValue.value = _controller.text;
-    // --- NUEVO: Registrar el observador ---
     WidgetsBinding.instance.addObserver(this);
   }
 
-  // --- NUEVO: Método del ciclo de vida ---
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     super.didChangeAppLifecycleState(state);
-    // Si la app se reanuda (vuelve del segundo plano)
     if (state == AppLifecycleState.resumed) {
-      // Forzar un redibujo de la UI
       if (mounted) {
         setState(() {
-          // No es necesario cambiar nada aquí, solo llamar a setState
-          // para que Flutter reconstruya el widget y refresque la UI.
           print("IEEE Page - App resumed, forcing UI redraw.");
         });
       }
     }
   }
-
 
   void _setChatIdBasedOnUser() {
     User? currentUser = _auth.currentUser;
@@ -138,7 +130,7 @@ El usuario puede proporcionar:
     }
     try {
       _model = GenerativeModel(
-        model: 'gemini-2.0-pro-exp-02-05',
+        model: 'gemini-1.5-pro', // Cambiado a modelo estable
         apiKey: apiKey,
         generationConfig: GenerationConfig(
           temperature: 0.5,
@@ -171,7 +163,6 @@ El usuario puede proporcionar:
 
   Future<void> _saveMessageToFirestore(Map<String, dynamic> message) async {
     if (_chatId == null) return;
-    // Evitar guardar mensajes del sistema locales (subida/eliminación de archivos)
     if (message['role'] == 'system' &&
         (message['text'].contains('subido:') || message['text'].contains('eliminado'))) {
       print("IEEE Page - Local UI message not saved: ${message['text']}");
@@ -179,11 +170,9 @@ El usuario puede proporcionar:
     }
     try {
       final messageToSave = Map<String, dynamic>.from(message);
-      // Remover datos que no van a Firestore
       messageToSave.remove('id');
-      messageToSave.remove('pdfBytes'); // No guardar bytes de PDF en Firestore
+      messageToSave.remove('pdfBytes');
       messageToSave.remove('mimeType');
-      // Añadir timestamp del servidor
       messageToSave['timestamp'] = FieldValue.serverTimestamp();
       print("IEEE Page - Saving message to Firestore: ${messageToSave['role']}");
       await _firestore
@@ -193,7 +182,6 @@ El usuario puede proporcionar:
           .add(messageToSave);
     } catch (e) {
       print("IEEE Page - Error saving message: $e");
-      // Considerar mostrar un SnackBar o manejar el error de forma visible
     }
   }
 
@@ -206,7 +194,6 @@ El usuario puede proporcionar:
       }
       return;
     }
-    // Validar que haya algo que enviar (texto o archivo)
     if (userPrompt.trim().isEmpty && _selectedFile == null) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -219,17 +206,16 @@ El usuario puede proporcionar:
 
     setState(() => _isLoading = true);
 
-    // --- Preparar Mensaje del Usuario ---
     Map<String, dynamic> userMessageForHistory = {
       'role': 'user',
       'text': userPrompt.trim(),
-      'timestamp': DateTime.now(), // Usar DateTime local para UI inmediata
+      'timestamp': DateTime.now(),
     };
-    List<Part> partsForGemini = []; // Partes para enviar a la API
+    List<Part> currentParts = [];
 
-    Uint8List? pdfBytesForHistory; // Bytes para guardar temporalmente en historial local
+    Uint8List? pdfBytesForHistory;
+    String? mimeTypeForHistory;
 
-    // Procesar archivo PDF si existe
     if (_selectedFile != null) {
       userMessageForHistory['fileName'] = _selectedFile!.name;
       try {
@@ -244,9 +230,15 @@ El usuario puede proporcionar:
         if (pdfBytes.isEmpty) throw Exception("El archivo PDF está vacío o corrupto.");
 
         String mimeType = 'application/pdf';
-        partsForGemini.add(DataPart(mimeType, pdfBytes)); // Añadir PDF a la API
-        pdfBytesForHistory = pdfBytes; // Guardar para UI
-        // No añadir mimeType a userMessageForHistory, no es necesario para UI
+        final extension = _selectedFile!.extension?.toLowerCase();
+        if (extension != 'pdf') {
+          throw Exception("El archivo seleccionado no es un PDF válido.");
+        }
+
+        currentParts.add(DataPart(mimeType, pdfBytes));
+        pdfBytesForHistory = pdfBytes;
+        mimeTypeForHistory = mimeType;
+        print("IEEE Page - PDF prepared: ${_selectedFile!.name}, MIME: $mimeType, Bytes: ${pdfBytes.length}");
       } catch (e) {
         print("IEEE Page - Error procesando PDF: $e");
         final err = {
@@ -258,163 +250,122 @@ El usuario puede proporcionar:
           setState(() {
             _chatHistory.add(err);
             _isLoading = false;
-            _selectedFile = null; // Limpiar archivo seleccionado en error
+            _selectedFile = null;
             _isPreviewExpanded = false;
           });
         }
-        if (_chatId != null) _saveMessageToFirestore(err); // Guardar error si está autenticado
+        if (_chatId != null) _saveMessageToFirestore(err);
         _scrollToBottom(jump: false);
-        return; // Detener ejecución
+        return;
       }
     }
 
-    // Añadir texto si existe
     if (userPrompt.trim().isNotEmpty) {
-      partsForGemini.add(TextPart(userPrompt.trim()));
+      currentParts.add(TextPart(userPrompt.trim()));
     }
 
-    // Añadir bytes a historial local si hay PDF (para posible reintento o UI)
     if (pdfBytesForHistory != null) {
       userMessageForHistory['pdfBytes'] = pdfBytesForHistory;
-      // userMessageForHistory['mimeType'] = mimeTypeForHistory; // No necesario para UI
+      userMessageForHistory['mimeType'] = mimeTypeForHistory;
     }
 
-    // --- Actualizar UI y Guardar Mensaje del Usuario ---
     setState(() {
-      _chatHistory.add(userMessageForHistory); // Añadir a UI
-      _pendingUserMessage = null; // Limpiar mensaje pendiente
-      _controller.clear(); // Limpiar campo de texto
-      _textFieldValue.value = ''; // Limpiar notifier
+      _chatHistory.add(userMessageForHistory);
+      _pendingUserMessage = null;
+      _controller.clear();
+      _textFieldValue.value = '';
     });
-    _scrollToBottom(jump: false); // Desplazar hacia abajo
+    _scrollToBottom(jump: false);
 
-    // Guardar en Firestore si está autenticado (sin los bytes del PDF)
     if (_chatId != null) {
       final messageToSave = Map<String, dynamic>.from(userMessageForHistory);
-      messageToSave.remove('pdfBytes'); // No guardar bytes
-      messageToSave.remove('mimeType'); // No guardar mimeType
+      messageToSave.remove('pdfBytes');
+      messageToSave.remove('mimeType');
       await _saveMessageToFirestore(messageToSave);
     }
 
-    // Si no hay partes para Gemini (no debería ocurrir con la validación inicial)
-    if (partsForGemini.isEmpty) {
+    if (currentParts.isEmpty) {
       setState(() => _isLoading = false);
       return;
     }
 
-    // --- Llamada a la API de Gemini ---
     try {
-      // Construir historial para la API (solo texto y referencias a archivos)
       List<Content> conversationHistoryForGemini = _chatHistory
-          .where((msg) => msg['role'] == 'user' || msg['role'] == 'assistant') // Filtrar roles relevantes
+          .where((msg) => msg['role'] == 'user' || msg['role'] == 'assistant')
+          .take(_chatHistory.length - 1)
           .map((msg) {
-        // Crear el contenido para este mensaje
-        List<Part> currentParts = [];
-        // Añadir texto si existe
+        List<Part> parts = [];
         if (msg['text'] != null && (msg['text'] as String).trim().isNotEmpty) {
-          currentParts.add(TextPart(msg['text']));
+          parts.add(TextPart(msg['text']));
         }
-        // Añadir PDF si es mensaje de usuario y tiene bytes (solo para el último mensaje enviado)
-        if (msg == userMessageForHistory && msg['pdfBytes'] != null) {
-          currentParts.add(DataPart('application/pdf', msg['pdfBytes']));
-        } else if (msg['fileName'] != null && msg['role'] == 'user') {
-          // Para mensajes anteriores con archivo, solo indicar el nombre
-          currentParts.add(TextPart("[Archivo adjunto: ${msg['fileName']}]"));
+        if (msg['role'] == 'user' && msg['fileName'] != null) {
+          parts.add(TextPart("[Archivo adjunto: ${msg['fileName']}]"));
         }
-
-        // Determinar el rol para Gemini ('user' o 'model')
         final role = msg['role'] == 'assistant' ? 'model' : 'user';
-
-        // Crear el Content object si hay partes
-        if (currentParts.isNotEmpty) {
-          return Content(role, currentParts);
-        } else {
-          // Devolver un Content vacío si no hay partes (no debería pasar)
-          return Content(role, [TextPart('')]);
-        }
+        return Content(role, parts.isNotEmpty ? parts : [TextPart('')]);
       }).toList();
 
-      // Asegurarse de que el último mensaje enviado (con el PDF si lo hay) esté al final
-      // (El mapeo anterior ya debería mantener el orden, pero esto es una doble verificación)
-      // No es necesario reordenar si se mapea directamente desde _chatHistory que ya está ordenado.
+      conversationHistoryForGemini.add(Content('user', currentParts));
 
-      print("IEEE Page - Sending content to Gemini with history: ${conversationHistoryForGemini.length} items");
-      // Enviar el historial completo a la API
+      print("IEEE Page - Sending content to Gemini: ${conversationHistoryForGemini.length} items, Current parts: ${currentParts.length}");
       final response = await _model!.generateContent(conversationHistoryForGemini);
-
 
       print("IEEE Page - Response received: ${response.text}");
       final assistantMessage = {
         'role': 'assistant',
         'text': response.text ?? 'El asistente no proporcionó respuesta.',
-        'timestamp': DateTime.now(), // Usar DateTime local para UI
+        'timestamp': DateTime.now(),
       };
 
-      // --- Actualizar UI y Guardar Respuesta del Asistente ---
       setState(() {
-        _chatHistory.add(assistantMessage); // Añadir a UI
+        _chatHistory.add(assistantMessage);
       });
-      _scrollToBottom(jump: false); // Desplazar
+      _scrollToBottom(jump: false);
 
-      // Guardar en Firestore si está autenticado
       if (_chatId != null) await _saveMessageToFirestore(assistantMessage);
-
     } catch (e) {
       print("IEEE Page - Error generating response: $e");
+      String errorMessage = 'Error al contactar al asistente: $e';
+      if (e.toString().contains('file') || e.toString().contains('pdf')) {
+        errorMessage = 'Error: El PDF no pudo ser procesado por el asistente. Asegúrate de que sea un PDF válido y legible.';
+      }
       final err = {
         'role': 'system',
-        'text': 'Error al contactar al asistente: $e',
+        'text': errorMessage,
         'timestamp': DateTime.now(),
       };
       if (mounted) setState(() => _chatHistory.add(err));
-      if (_chatId != null) _saveMessageToFirestore(err); // Guardar error
+      if (_chatId != null) _saveMessageToFirestore(err);
     } finally {
-      // --- Limpieza Final ---
       if (mounted) {
         setState(() {
-          _isLoading = false; // Ocultar indicador de carga
-          _selectedFile = null; // Limpiar archivo seleccionado después de enviar
-          _isPreviewExpanded = false; // Ocultar previsualización
+          _isLoading = false;
+          _selectedFile = null;
+          _isPreviewExpanded = false;
         });
-        _scrollToBottom(jump: false); // Asegurar scroll al final
+        _scrollToBottom(jump: false);
       }
     }
   }
 
   Future<void> _pickFile() async {
     try {
-      // --- Manejo de Permisos (Android) ---
       bool permissionGranted = false;
       if (!kIsWeb && Platform.isAndroid) {
         final androidInfo = await DeviceInfoPlugin().androidInfo;
         final sdkInt = androidInfo.version.sdkInt;
         print("Android SDK: $sdkInt");
-        PermissionStatus status;
-        // Pedir permiso adecuado según versión de Android
-        if (sdkInt >= 33) { // Android 13+
-          status = await Permission.photos.request(); // Permiso más granular
-        } else { // Android < 13
-          status = await Permission.storage.request(); // Permiso de almacenamiento general
+        if (sdkInt >= 33) {
+          permissionGranted = await Permission.photos.request().isGranted;
+          print("Photos Permission Granted (SDK >= 33): $permissionGranted");
+        } else {
+          permissionGranted = await Permission.storage.request().isGranted;
+          print("Storage Permission Granted (SDK < 33): $permissionGranted");
         }
-        // Manejar caso de permiso denegado permanentemente
-        if (status.isPermanentlyDenied) {
-          if (mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(
-                content: const Text('Permiso denegado permanentemente. Habilítalo en la configuración.'),
-                action: SnackBarAction(label: 'Abrir Configuración', onPressed: openAppSettings), // Botón para ir a ajustes
-              ),
-            );
-          }
-          return; // No continuar si está denegado permanentemente
-        }
-        permissionGranted = status.isGranted; // Verificar si se concedió
-        print("${sdkInt >= 33 ? 'Photos' : 'Storage'} Permission Granted: $permissionGranted");
       } else {
-        permissionGranted = true; // Asumir permisos concedidos en otras plataformas (Web, iOS)
+        permissionGranted = true;
       }
 
-      // Si no se concedió el permiso, mostrar mensaje y salir
       if (!permissionGranted) {
         print("Permiso denegado por el usuario.");
         if (mounted) {
@@ -425,50 +376,57 @@ El usuario puede proporcionar:
         return;
       }
 
-      // --- Selección de Archivo ---
       final result = await FilePicker.platform.pickFiles(
-        type: FileType.custom, // Tipo personalizado
-        allowedExtensions: ['pdf'], // Solo permitir PDF
-        allowMultiple: false, // Solo un archivo
-        withData: kIsWeb, // Cargar bytes en Web
-        // withReadStream: !kIsWeb, // Considerar stream para archivos grandes en móvil
+        type: FileType.custom,
+        allowedExtensions: ['pdf'],
+        allowMultiple: false,
+        withData: true,
       );
 
-      // Si se seleccionó un archivo
       if (result != null && result.files.isNotEmpty) {
         final file = result.files.first;
 
-        // Validar tamaño del archivo (ej. 5MB)
         if (file.size > 5 * 1024 * 1024) {
           if (mounted) {
             ScaffoldMessenger.of(context).showSnackBar(
               const SnackBar(content: Text('El PDF excede el límite de 5MB.')),
             );
           }
-          return; // No procesar archivo grande
+          return;
         }
 
-        // Actualizar estado si el archivo es válido
+        Uint8List? pdfBytes = file.bytes;
+        if (!kIsWeb && file.path != null && (pdfBytes == null || pdfBytes.isEmpty)) {
+          pdfBytes = await File(file.path!).readAsBytes();
+        }
+
+        if (pdfBytes == null || pdfBytes.isEmpty) {
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('Error: No se pudieron leer los datos del PDF.')),
+            );
+          }
+          print("IEEE Page - Error: PDF bytes are null or empty.");
+          return;
+        }
+
         if (mounted) {
           setState(() {
-            _selectedFile = file; // Guardar archivo seleccionado
-            _isPreviewExpanded = true; // Mostrar previsualización
-            // Añadir mensaje informativo local
+            _selectedFile = file;
+            _isPreviewExpanded = true;
             _chatHistory.add({
               'role': 'system',
               'text': 'PDF subido: ${file.name}',
               'timestamp': DateTime.now(),
             });
           });
-          _scrollToBottom(jump: false); // Desplazar
-          print("IEEE Page - PDF selected: ${_selectedFile?.name}");
+          _scrollToBottom(jump: false);
+          print("IEEE Page - PDF selected: ${file.name}, Bytes: ${pdfBytes.length}");
         }
       } else {
-        // Selección cancelada por el usuario
         print("IEEE Page - File selection cancelled.");
       }
     } catch (e) {
-      // Manejo de errores durante la selección
       print("IEEE Page - Error picking file: $e");
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -481,22 +439,20 @@ El usuario puede proporcionar:
   void _removeFile() {
     if (mounted && _selectedFile != null) {
       setState(() {
-        // Añadir mensaje informativo local
         _chatHistory.add({
           'role': 'system',
           'text': 'PDF eliminado: ${_selectedFile!.name}',
           'timestamp': DateTime.now(),
         });
-        _selectedFile = null; // Limpiar archivo
-        _isPreviewExpanded = false; // Ocultar previsualización
+        _selectedFile = null;
+        _isPreviewExpanded = false;
       });
-      _scrollToBottom(jump: false); // Desplazar
+      _scrollToBottom(jump: false);
       print("IEEE Page - Selected PDF removed.");
     }
   }
 
   Future<void> _clearChat() async {
-    // Mostrar diálogo de confirmación
     bool? confirm = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
@@ -504,22 +460,21 @@ El usuario puede proporcionar:
         content: const Text('¿Estás seguro de que quieres borrar todo el historial de este chat? Esta acción no se puede deshacer.'),
         actions: [
           TextButton(
-            onPressed: () => Navigator.of(context).pop(false), // Cancelar
+            onPressed: () => Navigator.of(context).pop(false),
             child: const Text('Cancelar'),
           ),
           TextButton(
-            onPressed: () => Navigator.of(context).pop(true), // Confirmar
+            onPressed: () => Navigator.of(context).pop(true),
             child: const Text('Limpiar', style: TextStyle(color: Colors.red)),
           ),
         ],
       ),
     );
 
-    if (confirm != true) return; // Si el usuario cancela
+    if (confirm != true) return;
 
-    if (mounted) setState(() => _isLoading = true); // Mostrar indicador
+    if (mounted) setState(() => _isLoading = true);
 
-    // Mensaje de bienvenida a restaurar
     final welcomeMessage = {
       'role': 'assistant',
       'text': _chatId != null ? _initialWelcomeMessageText : _loginPromptMessageText,
@@ -527,11 +482,9 @@ El usuario puede proporcionar:
     };
 
     if (_chatId != null) {
-      // Usuario autenticado: Limpiar Firestore
       print("IEEE Page - Clearing Firestore for $_chatId/ieee_messages...");
       try {
         final ref = _firestore.collection('chats').doc(_chatId).collection('ieee_messages');
-        // Borrar en lotes
         QuerySnapshot snapshot;
         int deletedCount = 0;
         do {
@@ -548,19 +501,20 @@ El usuario puede proporcionar:
         } while (snapshot.docs.isNotEmpty);
         print("IEEE Page - Firestore history cleared.");
 
-        // Guardar mensaje de bienvenida en Firestore
         await _saveMessageToFirestore(welcomeMessage);
 
-        // Actualizar UI local
         if (mounted) {
           setState(() {
             _chatHistory = [welcomeMessage];
             _isLoading = false;
-            _initialScrollExecuted = false; // Permitir scroll inicial
+            _initialScrollExecuted = false;
+            _selectedFile = null;
+            _isPreviewExpanded = false;
+            _controller.clear();
+            _textFieldValue.value = '';
           });
         }
-        _scrollToBottom(jump: true); // Ir al mensaje de bienvenida
-
+        _scrollToBottom(jump: true);
       } catch (e) {
         print("IEEE Page - Error clearing Firestore: $e");
         final err = {
@@ -570,18 +524,21 @@ El usuario puede proporcionar:
         };
         if (mounted) {
           setState(() {
-            _chatHistory = [err, welcomeMessage]; // Mostrar error y bienvenida
+            _chatHistory = [err, welcomeMessage];
             _isLoading = false;
           });
         }
         _scrollToBottom(jump: true);
       }
     } else {
-      // Usuario no autenticado: Limpiar solo localmente
       if (mounted) {
         setState(() {
           _chatHistory = [welcomeMessage];
           _isLoading = false;
+          _selectedFile = null;
+          _isPreviewExpanded = false;
+          _controller.clear();
+          _textFieldValue.value = '';
         });
       }
       _scrollToBottom(jump: true);
@@ -589,7 +546,6 @@ El usuario puede proporcionar:
   }
 
   Future<void> _downloadHistory() async {
-    // 1. Filtrar mensajes relevantes
     final downloadableHistory = _chatHistory.where((msg) {
       final role = msg['role']?.toString().toUpperCase() ?? 'SYSTEM';
       final text = msg['text'] ?? '';
@@ -602,39 +558,30 @@ El usuario puede proporcionar:
       return true;
     }).toList();
 
-    // 2. Verificar si hay mensajes de usuario
     final hasUserMessages = _chatHistory.any((msg) =>
-    msg['role'] == 'user' &&
-        (msg['text']?.toString().trim().isNotEmpty == true || msg['fileName'] != null));
+    msg['role'] == 'user' && (msg['text']?.toString().trim().isNotEmpty == true || msg['fileName'] != null));
 
-    // 3. Bloquear en Android si no hay mensajes de usuario
     if (!kIsWeb && Platform.isAndroid && !hasUserMessages) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('No hay preguntas o archivos enviados para descargar.'),
-          ),
+          const SnackBar(content: Text('No hay preguntas o archivos enviados para descargar.')),
         );
       }
       return;
     }
 
-    // 4. Si no hay historial relevante después de filtrar
     if (downloadableHistory.isEmpty) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('No hay historial relevante para descargar.'),
-          ),
+          const SnackBar(content: Text('No hay historial relevante para descargar.')),
         );
       }
       return;
     }
 
-    if (mounted) setState(() => _isLoading = true); // Mostrar carga
+    if (mounted) setState(() => _isLoading = true);
 
     try {
-      // 5. Crear contenido del archivo
       final StringBuffer buffer = StringBuffer();
       buffer.writeln("Historial del Chat IEEE");
       buffer.writeln("=" * 30);
@@ -647,20 +594,18 @@ El usuario puede proporcionar:
         final text = message['text'] ?? '';
         dynamic ts = message['timestamp'];
         String timestampStr = 'N/A';
-
         try {
           if (ts is Timestamp) {
             timestampStr = formatter.format(ts.toDate().toLocal());
           } else if (ts is DateTime) {
             timestampStr = formatter.format(ts.toLocal());
           } else {
-            timestampStr = formatter.format(DateTime.now().toLocal()); // Fallback
+            timestampStr = formatter.format(DateTime.now().toLocal());
           }
         } catch (e) {
-          print("Error formateando timestamp para descarga: $e");
-          timestampStr = formatter.format(DateTime.now().toLocal()); // Fallback
+          print("Error formateando timestamp: $e");
+          timestampStr = formatter.format(DateTime.now().toLocal());
         }
-
         buffer.writeln("[$timestampStr] $role:");
         buffer.writeln(text);
         if (message['fileName'] != null) {
@@ -669,13 +614,11 @@ El usuario puede proporcionar:
         buffer.writeln("-" * 20);
       }
 
-      // 6. Preparar y guardar/descargar
       final String fileContent = buffer.toString();
       final String fileName = 'historial_ieee_${DateFormat('yyyyMMdd_HHmmss').format(DateTime.now())}.txt';
       final List<int> fileBytes = utf8.encode(fileContent);
 
       if (kIsWeb) {
-        // Descarga Web
         final blob = html.Blob([fileBytes], 'text/plain', 'native');
         final url = html.Url.createObjectUrlFromBlob(blob);
         final anchor = html.AnchorElement(href: url)
@@ -688,13 +631,11 @@ El usuario puede proporcionar:
           );
         }
       } else {
-        // Guardar Móvil/Escritorio
         String? outputFile = await FilePicker.platform.saveFile(
           dialogTitle: 'Guardar Historial IEEE',
           fileName: fileName,
           bytes: Uint8List.fromList(fileBytes),
         );
-
         if (outputFile == null) {
           if (mounted) {
             ScaffoldMessenger.of(context).showSnackBar(
@@ -718,7 +659,7 @@ El usuario puede proporcionar:
         );
       }
     } finally {
-      if (mounted) setState(() => _isLoading = false); // Ocultar carga
+      if (mounted) setState(() => _isLoading = false);
     }
   }
 
@@ -727,7 +668,6 @@ El usuario puede proporcionar:
     _controller.dispose();
     _scrollController.dispose();
     _textFieldValue.dispose();
-    // --- NUEVO: Remover el observador ---
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();
   }
@@ -739,7 +679,6 @@ El usuario puede proporcionar:
         if (jump) {
           _scrollController.jumpTo(maxExtent);
         } else {
-          // Solo animar si no estamos ya cerca del final
           if ((maxExtent - _scrollController.position.pixels).abs() > 50) {
             _scrollController.animateTo(
               maxExtent,
@@ -749,12 +688,10 @@ El usuario puede proporcionar:
           }
         }
       } else {
-        // Reintentar si no hay clientes
         Future.delayed(const Duration(milliseconds: 100), () => _scrollToBottom(jump: jump));
       }
     });
   }
-
 
   @override
   Widget build(BuildContext context) {
@@ -762,7 +699,6 @@ El usuario puede proporcionar:
       builder: (context, constraints) {
         bool isWideScreen = constraints.maxWidth > 720;
         double chatBubbleMaxWidth = isWideScreen ? 600 : constraints.maxWidth * 0.85;
-        // Determinar si se puede descargar
         bool hasDownloadableContent = !_isLoading && _chatHistory.any((msg) {
           final role = msg['role']?.toString().toUpperCase() ?? 'SYSTEM';
           final text = msg['text'] ?? '';
@@ -798,12 +734,10 @@ El usuario puede proporcionar:
           body: SafeArea(
             child: Column(
               children: [
-                // Área del Chat
                 Expanded(
                   child: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
                     stream: _getChatStream(),
                     builder: (context, snapshot) {
-                      // --- Manejo de Estados ---
                       if (snapshot.connectionState == ConnectionState.waiting && _chatId != null) {
                         return const Center(child: CircularProgressIndicator());
                       }
@@ -821,7 +755,6 @@ El usuario puede proporcionar:
                         }
                       }
 
-                      // --- Procesamiento de Mensajes ---
                       final List<Map<String, dynamic>> messagesFromStream;
                       if (snapshot.hasData && snapshot.data!.docs.isNotEmpty) {
                         messagesFromStream = snapshot.data!.docs.map((doc) {
@@ -830,11 +763,11 @@ El usuario puede proporcionar:
                           if (data['timestamp'] is Timestamp) {
                             data['timestamp'] = (data['timestamp'] as Timestamp).toDate();
                           } else if (data['timestamp'] is! DateTime) {
-                            data['timestamp'] = DateTime.now(); // Fallback
+                            data['timestamp'] = DateTime.now();
                           }
                           return data;
                         }).toList();
-                        _chatHistory = messagesFromStream; // Sincronizar
+                        _chatHistory = messagesFromStream;
                       } else {
                         messagesFromStream = [];
                         if (_chatHistory.isEmpty && _chatId != null) {
@@ -856,7 +789,6 @@ El usuario puede proporcionar:
                         });
                       }
 
-                      // --- Scroll Automático ---
                       final currentMessageCount = allMessages.length;
                       if (currentMessageCount > 0 && !_initialScrollExecuted) {
                         print("IEEE Page - Initial load ($currentMessageCount messages).");
@@ -868,7 +800,6 @@ El usuario puede proporcionar:
                       }
                       _previousMessageCount = currentMessageCount;
 
-                      // --- Lista de Mensajes ---
                       return AnimatedSwitcher(
                         duration: const Duration(milliseconds: 300),
                         child: ListView.builder(
@@ -881,19 +812,15 @@ El usuario puede proporcionar:
                             final role = message['role'] as String? ?? 'system';
                             final text = message['text'] as String? ?? '';
                             final fileName = message['fileName'] as String?;
-                            // final pdfBytes = message['pdfBytes'] as Uint8List?; // No necesitamos mostrar PDF en burbuja
                             final isUser = role == 'user';
                             final isSystem = role == 'system';
-
                             final key = ValueKey(message['id'] ?? message['timestamp'].toString());
 
-                            // --- Estilos ---
                             Color backgroundColor;
                             Color textColor;
                             Alignment alignment;
                             TextAlign textAlign;
                             CrossAxisAlignment crossAxisAlignment;
-
                             if (isUser) {
                               backgroundColor = Colors.teal[100]!;
                               textColor = Colors.teal[900]!;
@@ -906,7 +833,7 @@ El usuario puede proporcionar:
                               alignment = Alignment.center;
                               textAlign = TextAlign.center;
                               crossAxisAlignment = CrossAxisAlignment.center;
-                            } else { // Assistant
+                            } else {
                               backgroundColor = Colors.grey[200]!;
                               textColor = Colors.black87;
                               alignment = Alignment.centerLeft;
@@ -914,12 +841,10 @@ El usuario puede proporcionar:
                               crossAxisAlignment = CrossAxisAlignment.start;
                             }
 
-                            // Ocultar mensajes internos
                             if (isSystem && (text.contains('subido:') || text.contains('eliminado'))) {
                               return const SizedBox.shrink();
                             }
 
-                            // --- Burbuja ---
                             return Align(
                               key: key,
                               alignment: alignment,
@@ -943,7 +868,6 @@ El usuario puede proporcionar:
                                   crossAxisAlignment: crossAxisAlignment,
                                   mainAxisSize: MainAxisSize.min,
                                   children: [
-                                    // Mostrar referencia a PDF si es mensaje de usuario y tiene archivo
                                     if (isUser && fileName != null)
                                       Padding(
                                         padding: const EdgeInsets.only(bottom: 8.0),
@@ -962,10 +886,9 @@ El usuario puede proporcionar:
                                           ],
                                         ),
                                       ),
-                                    // Mostrar texto
                                     if (text.isNotEmpty)
                                       (role == 'assistant')
-                                          ? MarkdownBody( // Usar Markdown para asistente
+                                          ? MarkdownBody(
                                         data: text,
                                         selectable: true,
                                         styleSheet: MarkdownStyleSheet.fromTheme(Theme.of(context)).copyWith(
@@ -973,7 +896,7 @@ El usuario puede proporcionar:
                                           code: Theme.of(context).textTheme.bodyMedium?.copyWith(fontFamily: 'monospace', backgroundColor: Colors.black12, color: textColor),
                                         ),
                                       )
-                                          : SelectableText( // Texto normal para usuario/sistema
+                                          : SelectableText(
                                         text,
                                         textAlign: textAlign,
                                         style: TextStyle(
@@ -994,7 +917,6 @@ El usuario puede proporcionar:
                   ),
                 ),
 
-                // Previsualización de PDF Seleccionado
                 if (_selectedFile != null)
                   Padding(
                     padding: EdgeInsets.fromLTRB(isWideScreen ? 24.0 : 8.0, 0, isWideScreen ? 24.0 : 8.0, 8.0),
@@ -1011,12 +933,6 @@ El usuario puede proporcionar:
                                 Icon(Icons.picture_as_pdf_outlined, color: Colors.red[700], size: 20),
                                 const SizedBox(width: 8),
                                 Expanded(child: Text(_selectedFile!.name, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 13))),
-                                // Botón Mostrar/Ocultar (simplificado, ya que no hay preview real de PDF)
-                                // TextButton(
-                                //   style: TextButton.styleFrom(padding: EdgeInsets.zero, minimumSize: const Size(60, 30), tapTargetSize: MaterialTapTargetSize.shrinkWrap),
-                                //   onPressed: () => setState(() => _isPreviewExpanded = !_isPreviewExpanded),
-                                //   child: Text(_isPreviewExpanded ? 'Ocultar' : 'Mostrar', style: const TextStyle(color: Colors.teal, fontSize: 13)),
-                                // ),
                                 TextButton(
                                   style: TextButton.styleFrom(padding: EdgeInsets.zero, minimumSize: const Size(60, 30), tapTargetSize: MaterialTapTargetSize.shrinkWrap),
                                   onPressed: _isLoading ? null : _removeFile,
@@ -1024,27 +940,12 @@ El usuario puede proporcionar:
                                 ),
                               ],
                             ),
-                            // No mostrar AnimatedSize para PDF, ya que no hay previsualización
-                            // AnimatedSize(
-                            //   duration: const Duration(milliseconds: 300),
-                            //   curve: Curves.easeInOut,
-                            //   child: _isPreviewExpanded
-                            //       ? ConstrainedBox(
-                            //           constraints: BoxConstraints(maxHeight: isWideScreen ? 250 : 150),
-                            //           child: Padding(
-                            //             padding: const EdgeInsets.only(top: 8.0),
-                            //             child: Text('Vista previa no disponible para PDF en esta plataforma'), // Mensaje informativo
-                            //           ),
-                            //         )
-                            //       : const SizedBox.shrink(),
-                            // ),
                           ],
                         ),
                       ),
                     ),
                   ),
 
-                // Barra de Entrada
                 Container(
                   padding: EdgeInsets.fromLTRB(isWideScreen ? 24.0 : 8.0, 8.0, isWideScreen ? 24.0 : 8.0, 16.0),
                   decoration: BoxDecoration(
@@ -1054,12 +955,10 @@ El usuario puede proporcionar:
                   child: ValueListenableBuilder<String>(
                     valueListenable: _textFieldValue,
                     builder: (context, textValue, child) {
-                      // Determinar si se puede enviar
                       bool canSendMessage = !_isLoading && (textValue.trim().isNotEmpty || _selectedFile != null);
                       return Row(
                         crossAxisAlignment: CrossAxisAlignment.end,
                         children: [
-                          // Botón Adjuntar PDF
                           IconButton(
                             padding: const EdgeInsets.only(bottom: 8, right: 4),
                             icon: const Icon(Icons.upload_file_outlined, size: 28),
@@ -1067,7 +966,6 @@ El usuario puede proporcionar:
                             tooltip: 'Seleccionar PDF',
                             onPressed: _isLoading ? null : _pickFile,
                           ),
-                          // Campo de Texto
                           Expanded(
                             child: TextField(
                               controller: _controller,
@@ -1086,17 +984,13 @@ El usuario puede proporcionar:
                               onSubmitted: (value) {
                                 if (canSendMessage) _generateResponse(value.trim());
                               },
-                              onChanged: (value) {
-                                _textFieldValue.value = value; // Actualizar notifier
-                                _scrollToBottom(jump: false); // Scroll al escribir
-                              },
+                              onChanged: (value) => _textFieldValue.value = value,
                               keyboardType: TextInputType.multiline,
                               enabled: !_isLoading,
                               style: const TextStyle(fontSize: 16),
                             ),
                           ),
                           const SizedBox(width: 8),
-                          // Botón Enviar
                           IconButton(
                             padding: const EdgeInsets.only(bottom: 8, left: 4),
                             icon: _isLoading

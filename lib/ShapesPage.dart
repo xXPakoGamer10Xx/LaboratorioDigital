@@ -22,7 +22,6 @@ class ShapesPage extends StatefulWidget {
   State<ShapesPage> createState() => _ShapesPageState();
 }
 
-// --- NUEVO: Añadir WidgetsBindingObserver ---
 class _ShapesPageState extends State<ShapesPage> with WidgetsBindingObserver {
   String? _selectedShape;
   final TextEditingController _side1Controller = TextEditingController();
@@ -32,7 +31,7 @@ class _ShapesPageState extends State<ShapesPage> with WidgetsBindingObserver {
   final TextEditingController _areaController = TextEditingController();
   final TextEditingController _perimeterController = TextEditingController();
   final TextEditingController _apothemController = TextEditingController();
-  final TextEditingController _controller = TextEditingController(); // Controller para el campo de texto general (no usado directamente ahora)
+  final TextEditingController _controller = TextEditingController();
 
   List<Map<String, dynamic>> _chatHistory = [];
   PlatformFile? _selectedFile;
@@ -43,7 +42,7 @@ class _ShapesPageState extends State<ShapesPage> with WidgetsBindingObserver {
   String? _chatId;
   final ScrollController _scrollController = ScrollController();
   bool _isPreviewExpanded = false;
-  bool _isScrolling = false; // Controlar desplazamiento múltiple
+  bool _isScrolling = false;
   Map<String, dynamic>? _pendingUserMessage;
   bool _initialScrollExecuted = false;
   int _previousMessageCount = 0;
@@ -53,7 +52,7 @@ class _ShapesPageState extends State<ShapesPage> with WidgetsBindingObserver {
     'Rectángulo',
     'Círculo',
     'Polígono Regular',
-    'Texto' // Opción para describir textualmente
+    'Texto'
   ];
   static const String _initialWelcomeMessageText =
       '¡Bienvenido! Soy tu experto en figuras geométricas. Selecciona, describe o sube una imagen.';
@@ -103,21 +102,15 @@ El usuario puede proporcionar:
     _setChatIdBasedOnUser();
     print("Shapes Page - Initial Chat ID: $_chatId");
     _initializeModel();
-    // --- NUEVO: Registrar el observador ---
     WidgetsBinding.instance.addObserver(this);
   }
 
-  // --- NUEVO: Método del ciclo de vida ---
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     super.didChangeAppLifecycleState(state);
-    // Si la app se reanuda (vuelve del segundo plano)
     if (state == AppLifecycleState.resumed) {
-      // Forzar un redibujo de la UI
       if (mounted) {
         setState(() {
-          // No es necesario cambiar nada aquí, solo llamar a setState
-          // para que Flutter reconstruya el widget y refresque la UI.
           print("Shapes Page - App resumed, forcing UI redraw.");
         });
       }
@@ -147,7 +140,7 @@ El usuario puede proporcionar:
     }
     try {
       _model = GenerativeModel(
-        model: 'gemini-2.5-pro-exp-03-25', // Usar un modelo adecuado para visión y texto
+        model: 'gemini-2.5-pro-exp-03-25',
         apiKey: apiKey,
         generationConfig: GenerationConfig(
           temperature: 0.6,
@@ -180,7 +173,6 @@ El usuario puede proporcionar:
 
   Future<void> _saveMessageToFirestore(Map<String, dynamic> message) async {
     if (_chatId == null) return;
-    // Evitar guardar mensajes locales del sistema
     if (message['role'] == 'system' &&
         (message['text'].contains('subida:') || message['text'].contains('eliminada'))) {
       print("Shapes Page - Local UI message not saved: ${message['text']}");
@@ -189,9 +181,9 @@ El usuario puede proporcionar:
     try {
       final messageToSave = Map<String, dynamic>.from(message);
       messageToSave.remove('id');
-      messageToSave.remove('imageBytes'); // No guardar bytes en Firestore
+      messageToSave.remove('imageBytes');
       messageToSave.remove('mimeType');
-      messageToSave['timestamp'] = FieldValue.serverTimestamp(); // Usar timestamp del servidor
+      messageToSave['timestamp'] = FieldValue.serverTimestamp();
       print("Shapes Page - Saving message to Firestore: ${messageToSave['role']}");
       await _firestore
           .collection('chats')
@@ -200,7 +192,6 @@ El usuario puede proporcionar:
           .add(messageToSave);
     } catch (e) {
       print("Shapes Page - Error saving message: $e");
-      // Considerar mostrar feedback al usuario
     }
   }
 
@@ -213,13 +204,10 @@ El usuario puede proporcionar:
       }
       return;
     }
-    // Validar que haya algo que enviar
     if (userPrompt.trim().isEmpty && _selectedFile == null && _selectedShape == null) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-              content: Text(
-                  'Por favor, selecciona una figura, describe una o sube una imagen.')),
+          const SnackBar(content: Text('Por favor, selecciona una figura, describe una o sube una imagen.')),
         );
       }
       _scrollToBottom(jump: false);
@@ -228,18 +216,16 @@ El usuario puede proporcionar:
 
     setState(() => _isLoading = true);
 
-    // --- Preparar Mensaje del Usuario ---
     Map<String, dynamic> userMessageForHistory = {
       'role': 'user',
       'text': userPrompt.trim(),
       'timestamp': DateTime.now(),
     };
-    List<Part> partsForGemini = [];
+    List<Part> currentParts = [];
 
     Uint8List? imageBytesForHistory;
-    String? mimeTypeForHistory; // Necesario para DataPart
+    String? mimeTypeForHistory;
 
-    // Procesar imagen si existe
     if (_selectedFile != null) {
       userMessageForHistory['fileName'] = _selectedFile!.name;
       try {
@@ -253,16 +239,20 @@ El usuario puede proporcionar:
         }
         if (imageBytes.isEmpty) throw Exception("El archivo de imagen está vacío o corrupto.");
 
-        // Determinar mimeType (importante para la API)
-        mimeTypeForHistory = 'image/jpeg'; // Default
+        String mimeType = 'image/jpeg';
         final extension = _selectedFile!.extension?.toLowerCase();
-        if (extension == 'png') mimeTypeForHistory = 'image/png';
-        else if (extension == 'webp') mimeTypeForHistory = 'image/webp';
-        else if (extension == 'gif') mimeTypeForHistory = 'image/gif';
-        else if (extension == 'heic') mimeTypeForHistory = 'image/heic';
+        if (extension == 'png') mimeType = 'image/png';
+        else if (extension == 'webp') mimeType = 'image/webp';
+        else if (extension == 'gif') mimeType = 'image/gif';
+        else if (extension == 'heic') {
+          mimeType = 'image/heic';
+          print("Shapes Page - Warning: HEIC format may not be fully supported by Gemini.");
+        }
 
-        partsForGemini.add(DataPart(mimeTypeForHistory!, imageBytes)); // Añadir imagen a la API
-        imageBytesForHistory = imageBytes; // Guardar para UI local
+        currentParts.add(DataPart(mimeType, imageBytes));
+        imageBytesForHistory = imageBytes;
+        mimeTypeForHistory = mimeType;
+        print("Shapes Page - Image prepared: ${_selectedFile!.name}, MIME: $mimeType, Bytes: ${imageBytes.length}");
       } catch (e) {
         print("Shapes Page - Error procesando imagen: $e");
         final err = {
@@ -284,22 +274,18 @@ El usuario puede proporcionar:
       }
     }
 
-    // Añadir texto si existe
     if (userPrompt.trim().isNotEmpty) {
-      partsForGemini.add(TextPart(userPrompt.trim()));
+      currentParts.add(TextPart(userPrompt.trim()));
     }
 
-    // Añadir bytes a historial local si hay imagen
     if (imageBytesForHistory != null) {
       userMessageForHistory['imageBytes'] = imageBytesForHistory;
-      // userMessageForHistory['mimeType'] = mimeTypeForHistory; // No necesario para UI local
+      userMessageForHistory['mimeType'] = mimeTypeForHistory;
     }
 
-    // --- Actualizar UI y Guardar Mensaje Usuario ---
     setState(() {
       _chatHistory.add(userMessageForHistory);
-      _pendingUserMessage = null; // Limpiar pendiente
-      // Limpiar campos de entrada específicos de figuras
+      _pendingUserMessage = null;
       _side1Controller.clear();
       _side2Controller.clear();
       _textController.clear();
@@ -307,11 +293,9 @@ El usuario puede proporcionar:
       _areaController.clear();
       _perimeterController.clear();
       _apothemController.clear();
-      // No limpiar _controller aquí, podría ser una descripción textual
     });
     _scrollToBottom(jump: false);
 
-    // Guardar en Firestore (sin bytes)
     if (_chatId != null) {
       final messageToSave = Map<String, dynamic>.from(userMessageForHistory);
       messageToSave.remove('imageBytes');
@@ -319,38 +303,31 @@ El usuario puede proporcionar:
       await _saveMessageToFirestore(messageToSave);
     }
 
-    // Si no hay partes para Gemini (improbable)
-    if (partsForGemini.isEmpty) {
+    if (currentParts.isEmpty) {
       setState(() => _isLoading = false);
       return;
     }
 
-    // --- Llamada a Gemini API ---
     try {
-      // Construir historial para la API
       List<Content> conversationHistoryForGemini = _chatHistory
           .where((msg) => msg['role'] == 'user' || msg['role'] == 'assistant')
+          .take(_chatHistory.length - 1)
           .map((msg) {
-        List<Part> currentParts = [];
-        // Añadir texto
+        List<Part> parts = [];
         if (msg['text'] != null && (msg['text'] as String).trim().isNotEmpty) {
-          currentParts.add(TextPart(msg['text']));
+          parts.add(TextPart(msg['text']));
         }
-        // Añadir imagen si es el mensaje actual y tiene bytes/mimeType
-        if (msg == userMessageForHistory && msg['imageBytes'] != null && mimeTypeForHistory != null) {
-          currentParts.add(DataPart(mimeTypeForHistory, msg['imageBytes']));
-        } else if (msg['fileName'] != null && msg['role'] == 'user') {
-          // Referencia a imagen en mensajes anteriores
-          currentParts.add(TextPart("[Imagen adjunta: ${msg['fileName']}]"));
+        if (msg['role'] == 'user' && msg['imageBytes'] != null && msg['mimeType'] != null) {
+          parts.add(DataPart(msg['mimeType'], msg['imageBytes']));
         }
-
         final role = msg['role'] == 'assistant' ? 'model' : 'user';
-        return Content(role, currentParts.isNotEmpty ? currentParts : [TextPart('')]); // Evitar partes vacías
+        return Content(role, parts.isNotEmpty ? parts : [TextPart('')]);
       }).toList();
 
+      conversationHistoryForGemini.add(Content('user', currentParts));
 
-      print("Shapes Page - Sending content to Gemini with history: ${conversationHistoryForGemini.length} items");
-      final response = await _model!.generateContent(conversationHistoryForGemini); // Enviar historial
+      print("Shapes Page - Sending content to Gemini: ${conversationHistoryForGemini.length} items, Current parts: ${currentParts.length}");
+      final response = await _model!.generateContent(conversationHistoryForGemini);
 
       print("Shapes Page - Response received: ${response.text}");
       final assistantMessage = {
@@ -359,35 +336,34 @@ El usuario puede proporcionar:
         'timestamp': DateTime.now(),
       };
 
-      // --- Actualizar UI y Guardar Respuesta Asistente ---
       setState(() {
         _chatHistory.add(assistantMessage);
       });
       _scrollToBottom(jump: false);
 
       if (_chatId != null) await _saveMessageToFirestore(assistantMessage);
-
     } catch (e) {
       print("Shapes Page - Error generating response: $e");
+      String errorMessage = 'Error al contactar al asistente: $e';
+      if (e.toString().contains('image')) {
+        errorMessage = 'Error: La imagen no pudo ser procesada por el asistente. Intenta con otro formato (JPEG, PNG).';
+      }
       final err = {
         'role': 'system',
-        'text': 'Error al contactar al asistente: $e',
+        'text': errorMessage,
         'timestamp': DateTime.now(),
       };
       if (mounted) setState(() => _chatHistory.add(err));
       if (_chatId != null) _saveMessageToFirestore(err);
     } finally {
-      // --- Limpieza Final ---
       if (mounted) {
         setState(() {
           _isLoading = false;
-          _selectedFile = null; // Limpiar archivo después de enviar
+          _selectedFile = null;
           _isPreviewExpanded = false;
-          // Mantener _selectedShape si se usó para enviar, o limpiarlo si se envió imagen/texto
           if (imageBytesForHistory != null || _textController.text.isNotEmpty) {
             _selectedShape = null;
           }
-          // Limpiar _textController si se usó
           if (_textController.text.isNotEmpty) {
             _textController.clear();
           }
@@ -399,31 +375,18 @@ El usuario puede proporcionar:
 
   Future<void> _pickImage() async {
     try {
-      // --- Manejo de Permisos ---
       bool permissionGranted = false;
       if (!kIsWeb && Platform.isAndroid) {
         final androidInfo = await DeviceInfoPlugin().androidInfo;
         final sdkInt = androidInfo.version.sdkInt;
         print("Android SDK: $sdkInt");
-        PermissionStatus status;
         if (sdkInt >= 33) {
-          status = await Permission.photos.request();
+          permissionGranted = await Permission.photos.request().isGranted;
+          print("Photos Permission Granted (SDK >= 33): $permissionGranted");
         } else {
-          status = await Permission.storage.request();
+          permissionGranted = await Permission.storage.request().isGranted;
+          print("Storage Permission Granted (SDK < 33): $permissionGranted");
         }
-        if (status.isPermanentlyDenied) {
-          if (mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(
-                content: const Text('Permiso denegado permanentemente. Habilítalo en la configuración.'),
-                action: SnackBarAction(label: 'Abrir Configuración', onPressed: openAppSettings),
-              ),
-            );
-          }
-          return;
-        }
-        permissionGranted = status.isGranted;
-        print("${sdkInt >= 33 ? 'Photos' : 'Storage'} Permission Granted: $permissionGranted");
       } else {
         permissionGranted = true;
       }
@@ -438,18 +401,16 @@ El usuario puede proporcionar:
         return;
       }
 
-      // --- Selección de Archivo ---
       final result = await FilePicker.platform.pickFiles(
-        type: FileType.image, // Solo imágenes
+        type: FileType.image,
         allowMultiple: false,
-        withData: kIsWeb,
+        withData: true,
       );
 
       if (result != null && result.files.isNotEmpty) {
         final file = result.files.first;
 
-        // Validar tamaño
-        if (file.size > 5 * 1024 * 1024) { // 5MB limit
+        if (file.size > 5 * 1024 * 1024) {
           if (mounted) {
             ScaffoldMessenger.of(context).showSnackBar(
               const SnackBar(content: Text('La imagen excede el límite de 5MB.')),
@@ -458,13 +419,26 @@ El usuario puede proporcionar:
           return;
         }
 
-        // Actualizar estado
+        Uint8List? imageBytes = file.bytes;
+        if (!kIsWeb && file.path != null && (imageBytes == null || imageBytes.isEmpty)) {
+          imageBytes = await File(file.path!).readAsBytes();
+        }
+
+        if (imageBytes == null || imageBytes.isEmpty) {
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('Error: No se pudieron leer los datos de la imagen.')),
+            );
+          }
+          print("Shapes Page - Error: Image bytes are null or empty.");
+          return;
+        }
+
         if (mounted) {
           setState(() {
-            _selectedFile = file; // Guardar archivo
-            _isPreviewExpanded = true; // Mostrar preview
-            _selectedShape = null; // Deseleccionar figura si se sube imagen
-            // Limpiar campos de figuras predefinidas
+            _selectedFile = file;
+            _isPreviewExpanded = true;
+            _selectedShape = null;
             _side1Controller.clear();
             _side2Controller.clear();
             _textController.clear();
@@ -472,7 +446,6 @@ El usuario puede proporcionar:
             _areaController.clear();
             _perimeterController.clear();
             _apothemController.clear();
-            // Mensaje local
             _chatHistory.add({
               'role': 'system',
               'text': 'Imagen subida: ${file.name}',
@@ -480,7 +453,7 @@ El usuario puede proporcionar:
             });
           });
           _scrollToBottom(jump: false);
-          print("Shapes Page - Image selected: ${_selectedFile?.name}");
+          print("Shapes Page - Image selected: ${file.name}, Bytes: ${imageBytes.length}");
         }
       } else {
         print("Shapes Page - Image selection cancelled.");
@@ -512,7 +485,6 @@ El usuario puede proporcionar:
   }
 
   Future<void> _clearChat() async {
-    // Diálogo de confirmación
     bool? confirm = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
@@ -535,7 +507,6 @@ El usuario puede proporcionar:
 
     if (mounted) setState(() => _isLoading = true);
 
-    // Mensaje de bienvenida
     final welcomeMessage = {
       'role': 'assistant',
       'text': _chatId != null ? _initialWelcomeMessageText : _loginPromptMessageText,
@@ -543,11 +514,9 @@ El usuario puede proporcionar:
     };
 
     if (_chatId != null) {
-      // Limpiar Firestore
       print("Shapes Page - Clearing Firestore for $_chatId/shapes_messages...");
       try {
         final ref = _firestore.collection('chats').doc(_chatId).collection('shapes_messages');
-        // Borrar en lotes
         QuerySnapshot snapshot;
         int deletedCount = 0;
         do {
@@ -564,19 +533,17 @@ El usuario puede proporcionar:
         } while (snapshot.docs.isNotEmpty);
         print("Shapes Page - Firestore history cleared.");
 
-        // Guardar mensaje de bienvenida
         await _saveMessageToFirestore(welcomeMessage);
 
-        // Actualizar UI local
         if (mounted) {
           setState(() {
             _chatHistory = [welcomeMessage];
             _isLoading = false;
             _initialScrollExecuted = false;
-            _selectedFile = null; // Limpiar selección actual
+            _selectedFile = null;
             _selectedShape = null;
             _isPreviewExpanded = false;
-            _side1Controller.clear(); // Limpiar todos los campos
+            _side1Controller.clear();
             _side2Controller.clear();
             _textController.clear();
             _sidesController.clear();
@@ -586,7 +553,6 @@ El usuario puede proporcionar:
           });
         }
         _scrollToBottom(jump: true);
-
       } catch (e) {
         print("Shapes Page - Error clearing Firestore: $e");
         final err = {
@@ -603,15 +569,14 @@ El usuario puede proporcionar:
         _scrollToBottom(jump: true);
       }
     } else {
-      // Limpiar solo localmente
       if (mounted) {
         setState(() {
           _chatHistory = [welcomeMessage];
           _isLoading = false;
-          _selectedFile = null; // Limpiar selección actual
+          _selectedFile = null;
           _selectedShape = null;
           _isPreviewExpanded = false;
-          _side1Controller.clear(); // Limpiar todos los campos
+          _side1Controller.clear();
           _side2Controller.clear();
           _textController.clear();
           _sidesController.clear();
@@ -625,7 +590,6 @@ El usuario puede proporcionar:
   }
 
   Future<void> _downloadHistory() async {
-    // 1. Filtrar mensajes
     final downloadableHistory = _chatHistory.where((msg) {
       final role = msg['role']?.toString().toUpperCase() ?? 'SYSTEM';
       final text = msg['text'] ?? '';
@@ -638,30 +602,23 @@ El usuario puede proporcionar:
       return true;
     }).toList();
 
-    // 2. Verificar mensajes de usuario
     final hasUserMessages = _chatHistory.any((msg) =>
     msg['role'] == 'user' &&
         (msg['text']?.toString().trim().isNotEmpty == true || msg['fileName'] != null));
 
-    // 3. Bloquear en Android sin mensajes de usuario
     if (!kIsWeb && Platform.isAndroid && !hasUserMessages) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('No hay preguntas enviadas para descargar.'),
-          ),
+          const SnackBar(content: Text('No hay preguntas enviadas para descargar.')),
         );
       }
       return;
     }
 
-    // 4. Verificar si hay historial relevante
     if (downloadableHistory.isEmpty) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('No hay historial relevante para descargar.'),
-          ),
+          const SnackBar(content: Text('No hay historial relevante para descargar.')),
         );
       }
       return;
@@ -670,7 +627,6 @@ El usuario puede proporcionar:
     if (mounted) setState(() => _isLoading = true);
 
     try {
-      // 5. Crear contenido
       final StringBuffer buffer = StringBuffer();
       buffer.writeln("Historial del Chat de Figuras Geométricas");
       buffer.writeln("=" * 30);
@@ -705,13 +661,11 @@ El usuario puede proporcionar:
         buffer.writeln("-" * 20);
       }
 
-      // 6. Guardar/Descargar
       final String fileContent = buffer.toString();
       final String fileName = 'historial_figuras_${DateFormat('yyyyMMdd_HHmmss').format(DateTime.now())}.txt';
       final List<int> fileBytes = utf8.encode(fileContent);
 
       if (kIsWeb) {
-        // Web
         final blob = html.Blob([fileBytes], 'text/plain', 'native');
         final url = html.Url.createObjectUrlFromBlob(blob);
         final anchor = html.AnchorElement(href: url)
@@ -724,7 +678,6 @@ El usuario puede proporcionar:
           );
         }
       } else {
-        // Móvil/Escritorio
         String? outputFile = await FilePicker.platform.saveFile(
           dialogTitle: 'Guardar Historial de Figuras',
           fileName: fileName,
@@ -758,7 +711,6 @@ El usuario puede proporcionar:
     }
   }
 
-
   @override
   void dispose() {
     _side1Controller.dispose();
@@ -770,19 +722,17 @@ El usuario puede proporcionar:
     _apothemController.dispose();
     _controller.dispose();
     _scrollController.dispose();
-    // --- NUEVO: Remover el observador ---
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();
   }
 
   void _scrollToBottom({required bool jump}) {
-    if (_isScrolling) return; // Evitar llamadas múltiples si ya está en proceso
+    if (_isScrolling) return;
     _isScrolling = true;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (_scrollController.hasClients) {
         final maxExtent = _scrollController.position.maxScrollExtent;
         final currentPosition = _scrollController.position.pixels;
-        // Solo animar/saltar si no estamos ya muy cerca del final
         if ((maxExtent - currentPosition).abs() > 50) {
           if (jump) {
             _scrollController.jumpTo(maxExtent);
@@ -795,27 +745,22 @@ El usuario puede proporcionar:
           }
         }
       }
-      // Permitir futuros scrolls después de un pequeño retraso
       Future.delayed(const Duration(milliseconds: 50), () => _isScrolling = false);
     });
   }
 
-  // Función para intentar generar la respuesta basada en la entrada actual
   void _tryGenerateResponse() {
-    if (_isLoading) return; // No hacer nada si ya está cargando
+    if (_isLoading) return;
 
     String userPrompt = '';
 
-    // Prioridad 1: Archivo seleccionado
     if (_selectedFile != null) {
       userPrompt = 'Analiza la figura geométrica en la imagen subida.';
-      // Limpiar campos de texto si se envía imagen
       _textController.clear();
       _generateResponse(userPrompt);
       return;
     }
 
-    // Prioridad 2: Figura seleccionada del Dropdown
     if (_selectedShape != null) {
       bool isValidInput = true;
       String shapeDetails = '';
@@ -855,9 +800,8 @@ El usuario puede proporcionar:
           if (nLados == null || nLados < 3) {
             isValidInput = false;
             ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Ingresa un número de lados válido (entero ≥ 3).')));
-            break; // Salir del switch si los lados no son válidos
+            break;
           }
-          // Validar que al menos uno de los opcionales tenga un valor numérico válido si se ingresó
           final lado = _side1Controller.text.trim().isNotEmpty ? double.tryParse(_side1Controller.text.trim()) : null;
           final area = _areaController.text.trim().isNotEmpty ? double.tryParse(_areaController.text.trim()) : null;
           final perimetro = _perimeterController.text.trim().isNotEmpty ? double.tryParse(_perimeterController.text.trim()) : null;
@@ -893,30 +837,26 @@ El usuario puede proporcionar:
           }
           break;
         default:
-          isValidInput = false; // Figura no reconocida
+          isValidInput = false;
       }
 
       if (isValidInput) {
         userPrompt = 'Analiza $shapeDetails.';
         _generateResponse(userPrompt);
       }
-      return; // Salir después de procesar figura seleccionada (o mostrar error)
+      return;
     }
 
-    // Prioridad 3: Texto descriptivo (si no hay archivo ni figura seleccionada)
     if (_textController.text.trim().isNotEmpty) {
       userPrompt = 'Analiza una figura con las siguientes características: ${_textController.text.trim()}.';
       _generateResponse(userPrompt);
       return;
     }
 
-
-    // Si no hay ninguna entrada válida
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(content: Text('Selecciona una figura, describe una o sube una imagen.')),
     );
   }
-
 
   @override
   Widget build(BuildContext context) {
@@ -924,12 +864,10 @@ El usuario puede proporcionar:
       builder: (context, constraints) {
         bool isWideScreen = constraints.maxWidth > 720;
         double chatBubbleMaxWidth = isWideScreen ? 600 : constraints.maxWidth * 0.85;
-        // Determinar si se puede enviar (no cargando Y (archivo O figura seleccionada con datos O texto descriptivo))
         bool canSendMessage = !_isLoading &&
             (_selectedFile != null ||
-                _selectedShape != null || // Simplificado, la validación fina se hace en _tryGenerateResponse
-                _textController.text.trim().isNotEmpty); // Permitir enviar si hay texto descriptivo
-        // Determinar si se puede descargar
+                _selectedShape != null ||
+                _textController.text.trim().isNotEmpty);
         bool hasDownloadableContent = !_isLoading && _chatHistory.any((msg) {
           final role = msg['role']?.toString().toUpperCase() ?? 'SYSTEM';
           final text = msg['text'] ?? '';
@@ -965,12 +903,10 @@ El usuario puede proporcionar:
           body: SafeArea(
             child: Column(
               children: [
-                // Área del Chat
                 Expanded(
                   child: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
                     stream: _getChatStream(),
                     builder: (context, snapshot) {
-                      // --- Manejo de Estados ---
                       if (snapshot.connectionState == ConnectionState.waiting && _chatId != null) {
                         return const Center(child: CircularProgressIndicator());
                       }
@@ -984,7 +920,6 @@ El usuario puede proporcionar:
                         }
                       }
 
-                      // --- Procesamiento de Mensajes ---
                       final List<Map<String, dynamic>> messagesFromStream;
                       if (snapshot.hasData && snapshot.data!.docs.isNotEmpty) {
                         messagesFromStream = snapshot.data!.docs.map((doc) {
@@ -1015,7 +950,6 @@ El usuario puede proporcionar:
                         });
                       }
 
-                      // --- Scroll ---
                       final currentMessageCount = allMessages.length;
                       if (currentMessageCount > 0 && !_initialScrollExecuted) {
                         print("Shapes Page - Initial load ($currentMessageCount messages).");
@@ -1027,7 +961,6 @@ El usuario puede proporcionar:
                       }
                       _previousMessageCount = currentMessageCount;
 
-                      // --- Lista ---
                       return AnimatedSwitcher(
                         duration: const Duration(milliseconds: 300),
                         child: ListView.builder(
@@ -1052,11 +985,23 @@ El usuario puede proporcionar:
                             CrossAxisAlignment crossAxisAlignment;
 
                             if (isUser) {
-                              backgroundColor = Colors.teal[100]!; textColor = Colors.teal[900]!; alignment = Alignment.centerRight; textAlign = TextAlign.left; crossAxisAlignment = CrossAxisAlignment.start;
+                              backgroundColor = Colors.teal[100]!;
+                              textColor = Colors.teal[900]!;
+                              alignment = Alignment.centerRight;
+                              textAlign = TextAlign.left;
+                              crossAxisAlignment = CrossAxisAlignment.start;
                             } else if (isSystem) {
-                              backgroundColor = Colors.orange[100]!; textColor = Colors.orange[900]!; alignment = Alignment.center; textAlign = TextAlign.center; crossAxisAlignment = CrossAxisAlignment.center;
+                              backgroundColor = Colors.orange[100]!;
+                              textColor = Colors.orange[900]!;
+                              alignment = Alignment.center;
+                              textAlign = TextAlign.center;
+                              crossAxisAlignment = CrossAxisAlignment.center;
                             } else {
-                              backgroundColor = Colors.grey[200]!; textColor = Colors.black87; alignment = Alignment.centerLeft; textAlign = TextAlign.left; crossAxisAlignment = CrossAxisAlignment.start;
+                              backgroundColor = Colors.grey[200]!;
+                              textColor = Colors.black87;
+                              alignment = Alignment.centerLeft;
+                              textAlign = TextAlign.left;
+                              crossAxisAlignment = CrossAxisAlignment.start;
                             }
 
                             if (isSystem && (text.contains('subida:') || text.contains('eliminada:'))) {
@@ -1069,7 +1014,18 @@ El usuario puede proporcionar:
                               child: Container(
                                 margin: const EdgeInsets.symmetric(vertical: 5.0),
                                 padding: const EdgeInsets.symmetric(horizontal: 14.0, vertical: 10.0),
-                                decoration: BoxDecoration(color: backgroundColor, borderRadius: BorderRadius.circular(16.0), boxShadow: [BoxShadow(color: Colors.grey.withOpacity(0.2), spreadRadius: 1, blurRadius: 2, offset: const Offset(0, 1))]),
+                                decoration: BoxDecoration(
+                                  color: backgroundColor,
+                                  borderRadius: BorderRadius.circular(16.0),
+                                  boxShadow: [
+                                    BoxShadow(
+                                      color: Colors.grey.withOpacity(0.2),
+                                      spreadRadius: 1,
+                                      blurRadius: 2,
+                                      offset: const Offset(0, 1),
+                                    ),
+                                  ],
+                                ),
                                 constraints: BoxConstraints(maxWidth: chatBubbleMaxWidth),
                                 child: Column(
                                   crossAxisAlignment: crossAxisAlignment,
@@ -1086,18 +1042,48 @@ El usuario puede proporcionar:
                                               children: [
                                                 Icon(Icons.image_outlined, size: 16, color: textColor.withOpacity(0.8)),
                                                 const SizedBox(width: 4),
-                                                Flexible(child: Text(fileName, style: TextStyle(fontSize: 13, fontStyle: FontStyle.italic, color: textColor.withOpacity(0.8)), overflow: TextOverflow.ellipsis)),
+                                                Flexible(
+                                                  child: Text(
+                                                    fileName,
+                                                    style: TextStyle(fontSize: 13, fontStyle: FontStyle.italic, color: textColor.withOpacity(0.8)),
+                                                    overflow: TextOverflow.ellipsis,
+                                                  ),
+                                                ),
                                               ],
                                             ),
                                             const SizedBox(height: 6),
-                                            ClipRRect(borderRadius: BorderRadius.circular(8), child: Image.memory(imageBytes, fit: BoxFit.contain, height: 100, errorBuilder: (c, e, s) => const Text('Error al mostrar imagen'))),
+                                            ClipRRect(
+                                              borderRadius: BorderRadius.circular(8),
+                                              child: Image.memory(
+                                                imageBytes,
+                                                fit: BoxFit.contain,
+                                                height: 100,
+                                                errorBuilder: (c, e, s) => const Text('Error al mostrar imagen'),
+                                              ),
+                                            ),
                                           ],
                                         ),
                                       ),
                                     if (text.isNotEmpty)
                                       (role == 'assistant')
-                                          ? MarkdownBody(data: text, selectable: true, styleSheet: MarkdownStyleSheet.fromTheme(Theme.of(context)).copyWith(p: Theme.of(context).textTheme.bodyMedium?.copyWith(color: textColor, height: 1.4), code: Theme.of(context).textTheme.bodyMedium?.copyWith(fontFamily: 'monospace', backgroundColor: Colors.black12, color: textColor)))
-                                          : SelectableText(text, textAlign: textAlign, style: TextStyle(color: textColor, fontStyle: isSystem ? FontStyle.italic : FontStyle.normal, fontSize: isSystem ? 13 : 16, height: 1.4)),
+                                          ? MarkdownBody(
+                                        data: text,
+                                        selectable: true,
+                                        styleSheet: MarkdownStyleSheet.fromTheme(Theme.of(context)).copyWith(
+                                          p: Theme.of(context).textTheme.bodyMedium?.copyWith(color: textColor, height: 1.4),
+                                          code: Theme.of(context).textTheme.bodyMedium?.copyWith(fontFamily: 'monospace', backgroundColor: Colors.black12, color: textColor),
+                                        ),
+                                      )
+                                          : SelectableText(
+                                        text,
+                                        textAlign: textAlign,
+                                        style: TextStyle(
+                                          color: textColor,
+                                          fontStyle: isSystem ? FontStyle.italic : FontStyle.normal,
+                                          fontSize: isSystem ? 13 : 16,
+                                          height: 1.4,
+                                        ),
+                                      ),
                                   ],
                                 ),
                               ),
@@ -1109,12 +1095,13 @@ El usuario puede proporcionar:
                   ),
                 ),
 
-                // Previsualización de Imagen Seleccionada
                 if (_selectedFile != null)
                   Padding(
                     padding: EdgeInsets.fromLTRB(isWideScreen ? 24.0 : 8.0, 0, isWideScreen ? 24.0 : 8.0, 8.0),
                     child: Card(
-                      elevation: 2, margin: EdgeInsets.zero, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                      elevation: 2,
+                      margin: EdgeInsets.zero,
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                       child: Padding(
                         padding: const EdgeInsets.all(8.0),
                         child: Column(
@@ -1124,14 +1111,38 @@ El usuario puede proporcionar:
                                 Icon(Icons.image_outlined, color: Colors.teal, size: 20),
                                 const SizedBox(width: 8),
                                 Expanded(child: Text(_selectedFile!.name, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 13))),
-                                TextButton(style: TextButton.styleFrom(padding: EdgeInsets.zero, minimumSize: const Size(60, 30), tapTargetSize: MaterialTapTargetSize.shrinkWrap), onPressed: () => setState(() => _isPreviewExpanded = !_isPreviewExpanded), child: Text(_isPreviewExpanded ? 'Ocultar' : 'Mostrar', style: const TextStyle(color: Colors.teal, fontSize: 13))),
-                                TextButton(style: TextButton.styleFrom(padding: EdgeInsets.zero, minimumSize: const Size(60, 30), tapTargetSize: MaterialTapTargetSize.shrinkWrap), onPressed: _isLoading ? null : _removeImage, child: Text('Eliminar', style: TextStyle(color: _isLoading ? Colors.grey : Colors.red, fontSize: 13))),
+                                TextButton(
+                                  style: TextButton.styleFrom(padding: EdgeInsets.zero, minimumSize: const Size(60, 30), tapTargetSize: MaterialTapTargetSize.shrinkWrap),
+                                  onPressed: () => setState(() => _isPreviewExpanded = !_isPreviewExpanded),
+                                  child: Text(_isPreviewExpanded ? 'Ocultar' : 'Mostrar', style: const TextStyle(color: Colors.teal, fontSize: 13)),
+                                ),
+                                TextButton(
+                                  style: TextButton.styleFrom(padding: EdgeInsets.zero, minimumSize: const Size(60, 30), tapTargetSize: MaterialTapTargetSize.shrinkWrap),
+                                  onPressed: _isLoading ? null : _removeImage,
+                                  child: Text('Eliminar', style: TextStyle(color: _isLoading ? Colors.grey : Colors.red, fontSize: 13)),
+                                ),
                               ],
                             ),
                             AnimatedSize(
-                              duration: const Duration(milliseconds: 300), curve: Curves.easeInOut,
+                              duration: const Duration(milliseconds: 300),
+                              curve: Curves.easeInOut,
                               child: _isPreviewExpanded
-                                  ? ConstrainedBox(constraints: BoxConstraints(maxHeight: isWideScreen ? 250 : 150), child: Padding(padding: const EdgeInsets.only(top: 8.0), child: ClipRRect(borderRadius: BorderRadius.circular(8), child: kIsWeb ? (_selectedFile?.bytes != null ? Image.memory(_selectedFile!.bytes!, fit: BoxFit.contain, errorBuilder: (c, e, s) => const Center(child: Text('Error (Web)'))) : const Center(child: Text('No disponible (Web)'))) : (_selectedFile?.path != null ? Image.file(File(_selectedFile!.path!), fit: BoxFit.contain, errorBuilder: (c, e, s) => const Center(child: Text('Error (Móvil)'))) : const Center(child: Text('No disponible (Móvil)'))))))
+                                  ? ConstrainedBox(
+                                constraints: BoxConstraints(maxHeight: isWideScreen ? 250 : 150),
+                                child: Padding(
+                                  padding: const EdgeInsets.only(top: 8.0),
+                                  child: ClipRRect(
+                                    borderRadius: BorderRadius.circular(8),
+                                    child: kIsWeb
+                                        ? (_selectedFile?.bytes != null
+                                        ? Image.memory(_selectedFile!.bytes!, fit: BoxFit.contain, errorBuilder: (c, e, s) => const Center(child: Text('Error (Web)')))
+                                        : const Center(child: Text('No disponible (Web)')))
+                                        : (_selectedFile?.path != null
+                                        ? Image.file(File(_selectedFile!.path!), fit: BoxFit.contain, errorBuilder: (c, e, s) => const Center(child: Text('Error (Móvil)')))
+                                        : const Center(child: Text('No disponible (Móvil)'))),
+                                  ),
+                                ),
+                              )
                                   : const SizedBox.shrink(),
                             ),
                           ],
@@ -1140,14 +1151,12 @@ El usuario puede proporcionar:
                     ),
                   ),
 
-                // Barra de Entrada Inferior
                 Container(
                   padding: EdgeInsets.fromLTRB(isWideScreen ? 24.0 : 8.0, 8.0, isWideScreen ? 24.0 : 8.0, 16.0),
                   decoration: BoxDecoration(color: Theme.of(context).cardColor, border: Border(top: BorderSide(color: Colors.grey.shade300, width: 0.5))),
-                  child: Column( // Usar Column para poner Dropdown/TextFields encima del botón
+                  child: Column(
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
-                      // Fila para Dropdown y Botón de Imagen
                       Row(
                         crossAxisAlignment: CrossAxisAlignment.end,
                         children: [
@@ -1156,7 +1165,6 @@ El usuario puede proporcionar:
                             icon: const Icon(Icons.image_search, size: 28),
                             color: _isLoading ? Colors.grey : Colors.teal,
                             tooltip: 'Subir Imagen',
-                            // Deshabilitar si ya hay una figura seleccionada o está cargando
                             onPressed: (_isLoading || _selectedShape != null) ? null : _pickImage,
                           ),
                           Expanded(
@@ -1165,22 +1173,28 @@ El usuario puede proporcionar:
                                 labelText: 'Selecciona figura',
                                 border: OutlineInputBorder(borderRadius: BorderRadius.circular(25.0), borderSide: BorderSide.none),
                                 focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(25.0), borderSide: BorderSide(color: Colors.teal.shade200, width: 1.5)),
-                                filled: true, fillColor: Colors.grey.shade100,
-                                contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12), isDense: true,
+                                filled: true,
+                                fillColor: Colors.grey.shade100,
+                                contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                                isDense: true,
                               ),
                               value: _selectedShape,
                               items: _shapes.map((s) => DropdownMenuItem<String>(value: s, child: Text(s))).toList(),
-                              // Deshabilitar si hay archivo seleccionado o está cargando
-                              onChanged: (_isLoading || _selectedFile != null) ? null : (v) => setState(() {
+                              onChanged: (_isLoading || _selectedFile != null)
+                                  ? null
+                                  : (v) => setState(() {
                                 _selectedShape = v;
-                                // Limpiar campos al cambiar de figura
-                                _side1Controller.clear(); _side2Controller.clear(); _textController.clear();
-                                _sidesController.clear(); _areaController.clear(); _perimeterController.clear(); _apothemController.clear();
+                                _side1Controller.clear();
+                                _side2Controller.clear();
+                                _textController.clear();
+                                _sidesController.clear();
+                                _areaController.clear();
+                                _perimeterController.clear();
+                                _apothemController.clear();
                               }),
                             ),
                           ),
-                          // Mover el botón de enviar fuera de esta fila si hay campos adicionales
-                          if (_selectedShape == null || _selectedShape == 'Texto') // Mostrar enviar aquí si no hay campos extra o es 'Texto'
+                          if (_selectedShape == null || _selectedShape == 'Texto')
                             Padding(
                               padding: const EdgeInsets.only(left: 8.0),
                               child: IconButton(
@@ -1193,11 +1207,8 @@ El usuario puede proporcionar:
                             ),
                         ],
                       ),
-
-                      // Campos de Texto Condicionales
                       if (_selectedShape != null && _selectedFile == null) ...[
                         const SizedBox(height: 8),
-                        // Campos para Triángulo o Rectángulo
                         if (_selectedShape == 'Triángulo' || _selectedShape == 'Rectángulo')
                           Row(
                             children: [
@@ -1206,28 +1217,26 @@ El usuario puede proporcionar:
                               Expanded(child: _buildTextField(_side2Controller, 'Altura')),
                             ],
                           ),
-                        // Campo para Círculo
                         if (_selectedShape == 'Círculo')
                           _buildTextField(_side1Controller, 'Radio'),
-                        // Campos para Polígono Regular
                         if (_selectedShape == 'Polígono Regular') ...[
                           _buildTextField(_sidesController, 'Lados (n ≥ 3)', keyboard: TextInputType.number),
                           const SizedBox(height: 8),
-                          Row(children: [ Expanded(child: _buildTextField(_side1Controller, 'Lado (opc)')), const SizedBox(width: 8), Expanded(child: _buildTextField(_apothemController, 'Apotema (opc)'))]),
+                          Row(children: [
+                            Expanded(child: _buildTextField(_side1Controller, 'Lado (opc)')),
+                            const SizedBox(width: 8),
+                            Expanded(child: _buildTextField(_apothemController, 'Apotema (opc)')),
+                          ]),
                           const SizedBox(height: 8),
-                          Row(children: [ Expanded(child: _buildTextField(_areaController, 'Área (opc)')), const SizedBox(width: 8), Expanded(child: _buildTextField(_perimeterController, 'Perímetro (opc)'))]),
+                          Row(children: [
+                            Expanded(child: _buildTextField(_areaController, 'Área (opc)')),
+                            const SizedBox(width: 8),
+                            Expanded(child: _buildTextField(_perimeterController, 'Perímetro (opc)')),
+                          ]),
                         ],
-                        // Campo para Descripción Textual
                         if (_selectedShape == 'Texto')
-                          _buildTextField(
-                            _textController, 'Describe la figura...',
-                            keyboard: TextInputType.text, maxLines: 3,
-                            // textInputAction: TextInputAction.send, // Quitar para evitar doble envío
-                            // onSubmitted: (_) => _tryGenerateResponse(),
-                          ),
-
-                        // Botón de Enviar (visible solo si hay campos adicionales)
-                        if (_selectedShape != 'Texto') // Mostrar botón separado si no es 'Texto'
+                          _buildTextField(_textController, 'Describe la figura...', keyboard: TextInputType.text, maxLines: 3),
+                        if (_selectedShape != 'Texto')
                           Padding(
                             padding: const EdgeInsets.only(top: 8.0),
                             child: ElevatedButton.icon(
@@ -1241,8 +1250,6 @@ El usuario puede proporcionar:
                             ),
                           ),
                       ],
-                      // Mostrar botón de enviar general si no hay figura seleccionada pero sí texto descriptivo
-                      // O si la figura es 'Texto' y ya se mostró el campo arriba
                       if (_selectedShape == null && _textController.text.trim().isNotEmpty)
                         Padding(
                           padding: const EdgeInsets.only(top: 8.0),
@@ -1267,7 +1274,6 @@ El usuario puede proporcionar:
     );
   }
 
-  // Widget auxiliar para crear TextFields comunes
   Widget _buildTextField(
       TextEditingController controller, String label,
       {TextInputType keyboard = TextInputType.number, int? maxLines = 1, TextInputAction? textInputAction, ValueChanged<String>? onSubmitted}) {
@@ -1277,15 +1283,17 @@ El usuario puede proporcionar:
         labelText: label,
         border: OutlineInputBorder(borderRadius: BorderRadius.circular(25.0), borderSide: BorderSide.none),
         focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(25.0), borderSide: BorderSide(color: Colors.teal.shade200, width: 1.5)),
-        filled: true, fillColor: Colors.grey.shade100,
-        contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12), isDense: true,
+        filled: true,
+        fillColor: Colors.grey.shade100,
+        contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        isDense: true,
       ),
       keyboardType: keyboard,
       maxLines: maxLines,
       enabled: !_isLoading,
       textInputAction: textInputAction,
       onSubmitted: onSubmitted,
-      onChanged: (_) => setState(() {}), // Actualizar UI para habilitar/deshabilitar botón
+      onChanged: (_) => setState(() {}),
       style: const TextStyle(fontSize: 16),
     );
   }

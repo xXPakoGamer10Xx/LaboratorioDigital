@@ -1,0 +1,48 @@
+{
+  "project_info": {
+    "project_number": "557432249181",
+    "project_id": "laboratoriodigital-982da",
+    "storage_bucket": "laboratoriodigital-982da.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:557432249181:android:8f89075775b801024ae6b4",
+        "android_client_info": {
+          "package_name": "com.example.calculadora"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyA9OD_rP2WFc8oo7Jz9XzcXhAWuWazwHkI"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    },
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:557432249181:android:8e56162747f7444e4ae6b4",
+        "android_client_info": {
+          "package_name": "com.example.laboratorio_digital"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyA9OD_rP2WFc8oo7Jz9XzcXhAWuWazwHkI"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
