@@ -88,4 +88,8 @@ Las contribuciones son bienvenidas. Por favor, abre un issue o un pull request p
 
 ## 📜 Licencia
 
+<<<<<<< HEAD
 (Opcional) Especifica la licencia de tu proyecto aquí (ej. MIT, Apache 2.0). Si no estás seguro, puedes omitirlo por ahora.
+=======
+(Opcional) Especifica la licencia de tu proyecto aquí (ej. MIT, Apache 2.0). Si no estás seguro, puedes omitirlo por ahora.
+>>>>>>> b5064fc004544de9cdf120832a8e0e0794cb9dac
